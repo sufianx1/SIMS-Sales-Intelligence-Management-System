@@ -13,6 +13,7 @@ class DashboardMetrics(BaseModel):
     total_profit: float = 0.0
     profit_margin: float = 0.0
     total_orders: int = 0
+    average_order_value: float = 0.0
     total_units: int = 0
     total_customers: int = 0
     total_products: int = 0
@@ -72,3 +73,15 @@ class BreakdownMetric(BaseModel):
     sales: float
     profit: float
     orders_count: int
+
+
+class BusinessInsight(BaseModel):
+    insight_id: str
+    category: str
+    severity: str
+    title: str
+    summary: str
+    explanation: str
+    supporting_data: Dict[str, Any]
+    limitations: str
+    recommended_action: str

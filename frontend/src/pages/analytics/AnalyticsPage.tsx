@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { analyticsApi, dashboardApi } from '../../api';
+import { analyticsApi, dashboardApi, BusinessInsight } from '../../api';
 import { LineChart } from '../../components/charts/LineChart';
 import { BarChart } from '../../components/charts/BarChart';
 import { PieChart } from '../../components/charts/PieChart';
@@ -13,16 +13,18 @@ export const AnalyticsPage: React.FC = () => {
   const [regionData, setRegionData] = useState<{ region: string; total_sales: number; total_profit: number }[]>([]);
   const [topProducts, setTopProducts] = useState<{ product_name: string; total_sales: number }[]>([]);
   const [topCustomers, setTopCustomers] = useState<{ customer_name: string; total_sales: number }[]>([]);
+  const [insights, setInsights] = useState<BusinessInsight[]>([]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [trendRes, chartsRes] = await Promise.all([
+      const [trendRes, chartsRes, insightsRes] = await Promise.all([
         analyticsApi.getTrends({
           start_date: startDate || undefined,
           end_date: endDate || undefined,
         }),
         dashboardApi.getCharts(),
+        analyticsApi.getInsights(),
       ]);
 
       setTrends(trendRes);
@@ -30,6 +32,7 @@ export const AnalyticsPage: React.FC = () => {
       setRegionData(chartsRes.sales_by_region || []);
       setTopProducts(chartsRes.top_products || []);
       setTopCustomers(chartsRes.top_customers || []);
+      setInsights(insightsRes || []);
     } catch (err) {
       console.error('Failed to load analytics data:', err);
     } finally {
@@ -136,6 +139,59 @@ export const AnalyticsPage: React.FC = () => {
                   <h4 className="fw-bold text-info mt-1 mb-0">{profitMargin}%</h4>
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Explainable Business Insights Section */}
+          <div className="card shadow-sm border-0 mb-4">
+            <div className="card-header bg-white border-0 pt-3 pb-0 d-flex justify-content-between align-items-center">
+              <div>
+                <h6 className="fw-bold mb-0 text-dark">
+                  <i className="bi bi-lightbulb text-warning me-2"></i>Explainable Business Insights & Operations Alerts
+                </h6>
+                <small className="text-muted">Rule-based analytical detections with explicit rationale, supporting data, and limitations.</small>
+              </div>
+              <span className="badge bg-light text-dark border">{insights.length} active detection{insights.length === 1 ? '' : 's'}</span>
+            </div>
+            <div className="card-body">
+              {insights.length > 0 ? (
+                <div className="row g-3">
+                  {insights.map((ins) => (
+                    <div key={ins.insight_id} className="col-12 col-md-6">
+                      <div className={`p-3 rounded border h-100 ${
+                        ins.severity === 'CRITICAL' ? 'border-danger bg-danger bg-opacity-10' :
+                        ins.severity === 'WARNING' ? 'border-warning bg-warning bg-opacity-10' :
+                        'border-info bg-info bg-opacity-10'
+                      }`}>
+                        <div className="d-flex justify-content-between align-items-center mb-2">
+                          <span className={`badge ${
+                            ins.severity === 'CRITICAL' ? 'bg-danger' :
+                            ins.severity === 'WARNING' ? 'bg-warning text-dark' :
+                            'bg-info text-dark'
+                          }`}>
+                            {ins.severity}
+                          </span>
+                          <span className="text-muted small">{ins.category.replace('_', ' ')}</span>
+                        </div>
+                        <h6 className="fw-bold mb-1">{ins.title}</h6>
+                        <p className="small mb-2 text-dark">{ins.summary}</p>
+                        
+                        <div className="bg-white p-2 rounded mb-2 border small">
+                          <div className="mb-1"><strong>Why this was detected:</strong> {ins.explanation}</div>
+                          <div className="text-muted"><strong>Limitations:</strong> {ins.limitations}</div>
+                        </div>
+
+                        <div className="d-flex align-items-center gap-1 text-primary small">
+                          <i className="bi bi-arrow-right-circle"></i>
+                          <span><strong>Action:</strong> {ins.recommended_action}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted mb-0 py-2 text-center">No anomalies or stockout alerts detected for active tenant.</p>
+              )}
             </div>
           </div>
 

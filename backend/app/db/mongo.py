@@ -36,22 +36,32 @@ def get_client() -> pymongo.MongoClient:
         _is_mock = True
         return _mongo_client
 
+    import re
+    masked_uri = re.sub(r'://([^:]+):([^@]+)@', r'://\1:****@', settings.MONGODB_URI)
+
     try:
-        # Attempt connection with 1-second timeout
+        # Attempt connection with 20-second timeout for local/Atlas
         client = pymongo.MongoClient(
             settings.MONGODB_URI,
-            serverSelectionTimeoutMS=1000,
-            connectTimeoutMS=1000,
+            serverSelectionTimeoutMS=20000,
+            connectTimeoutMS=20000,
         )
         # Ping server to verify connectivity
         client.admin.command("ping")
-        logger.info(f"Connected successfully to live MongoDB at {settings.MONGODB_URI}")
+        logger.info(f"Connected successfully to live MongoDB at {masked_uri}")
         _mongo_client = client
         _is_mock = False
         return _mongo_client
     except (ServerSelectionTimeoutError, PyMongoError, Exception) as exc:
+        if settings.ENVIRONMENT.lower() in ("production", "staging"):
+            logger.error(f"FATAL: Production database connection to '{masked_uri}' failed: {exc}")
+            raise RuntimeError(
+                f"Production database connection failure: Cannot connect to live MongoDB instance at '{masked_uri}'. "
+                "Silent in-memory fallback is disabled in production to guarantee data persistence."
+            ) from exc
+
         logger.warning(
-            f"Live MongoDB connection to '{settings.MONGODB_URI}' unavailable ({exc}). "
+            f"Live MongoDB connection to '{masked_uri}' unavailable ({exc}). "
             "Falling back to embedded in-memory mongomock database."
         )
         import mongomock
@@ -110,9 +120,18 @@ def ensure_indexes(db: Database):
         db.inventory.create_index([("company_id", 1), ("store_id", 1), ("product_id", 1)], unique=True)
         db.inventory.create_index([("company_id", 1), ("quantity_on_hand", 1)])
 
-        # Inventory Movements
+        # Security & Token Blacklist
+        db.revoked_tokens.create_index("token", unique=True)
+        db.revoked_tokens.create_index("expires_at", expireAfterSeconds=0)
+
+        # Rate Limiting & Brute-force Tracking
+        db.login_attempts.create_index([("identifier", 1), ("ip_address", 1), ("timestamp", -1)])
+        db.login_attempts.create_index("timestamp", expireAfterSeconds=900)
+
+        # Inventory Movements & Transfers
         db.inventory_movements.create_index([("company_id", 1), ("timestamp", -1)])
         db.inventory_movements.create_index([("company_id", 1), ("product_id", 1)])
+        db.inventory_movements.create_index([("company_id", 1), ("from_store_id", 1), ("to_store_id", 1)])
 
         # Customers
         db.customers.create_index([("company_id", 1), ("customer_id", 1)], unique=True)
@@ -123,10 +142,14 @@ def ensure_indexes(db: Database):
         db.orders.create_index([("company_id", 1), ("customer_id", 1)])
 
         # Raw & Structured Imports
+        db.raw_imports.create_index([("company_id", 1), ("import_id", 1)], unique=True)
         db.raw_imports.create_index([("company_id", 1), ("created_at", -1)])
+        db.raw_import_rows.create_index([("company_id", 1), ("import_id", 1), ("row_index", 1)])
+        db.structured_imports.create_index([("company_id", 1), ("import_id", 1)], unique=True)
         db.structured_imports.create_index([("company_id", 1), ("created_at", -1)])
 
         # Integrations & Sync Logs
+        db.integrations.create_index([("company_id", 1), ("integration_id", 1)], unique=True)
         db.integrations.create_index([("company_id", 1), ("is_active", 1)])
         db.sync_logs.create_index([("company_id", 1), ("integration_id", 1), ("started_at", -1)])
 

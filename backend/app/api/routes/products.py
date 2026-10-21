@@ -48,10 +48,10 @@ def get_product(product_id: str, context: TenantContext = Depends(get_tenant_con
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(
     data: ProductCreate,
-    context: TenantContext = Depends(require_permission("CREATE_PRODUCT"))
+    context: TenantContext = Depends(require_permission("manage_products"))
 ):
     """
-    Creates a new product SKU under active company (Requires CREATE_PRODUCT permission).
+    Creates a new product SKU under active company (Requires manage_products permission).
     """
     return ProductService.create_product(context.company_id, data)
 
@@ -60,9 +60,9 @@ def create_product(
 def update_product(
     product_id: str,
     data: ProductUpdate,
-    context: TenantContext = Depends(require_permission("UPDATE_PRODUCT"))
+    context: TenantContext = Depends(require_permission("manage_products"))
 ):
     """
-    Updates product information under active company (Requires UPDATE_PRODUCT permission).
+    Updates product information under active company (Requires manage_products permission).
     """
     return ProductService.update_product(context.company_id, product_id, data)

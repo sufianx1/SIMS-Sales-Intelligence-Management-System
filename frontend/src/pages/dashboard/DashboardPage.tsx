@@ -11,6 +11,7 @@ export const DashboardPage: React.FC = () => {
     total_sales: number;
     total_profit: number;
     total_orders: number;
+    average_order_value?: number;
     total_customers: number;
     total_products: number;
   } | null>(null);
@@ -117,6 +118,16 @@ export const DashboardPage: React.FC = () => {
               {metrics?.total_orders.toLocaleString()}
             </div>
             <small className="text-muted" style={{ fontSize: '0.75rem' }}>Processed transaction headers</small>
+          </div>
+        </div>
+
+        <div className="col-12 col-sm-6 col-xl">
+          <div className="metric-card">
+            <div className="metric-label">Avg Order Value</div>
+            <div className="metric-value text-info">
+              ${(metrics?.average_order_value ?? (metrics && metrics.total_orders > 0 ? metrics.total_sales / metrics.total_orders : 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <small className="text-muted" style={{ fontSize: '0.75rem' }}>Revenue per transaction</small>
           </div>
         </div>
 

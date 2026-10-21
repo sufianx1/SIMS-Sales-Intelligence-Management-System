@@ -1,9 +1,11 @@
-# Enterprise Multi-Tenant Sales Management & Analytics System - Backend Dependencies
+# SIMS — Sales Intelligence and Management System - Backend Dependencies
+# Database: MongoDB via PyMongo (mongomock used as in-memory fallback for dev/test)
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
 pydantic-settings>=2.4.0
-pyodbc>=5.1.0
+pymongo>=4.8.0
+mongomock>=4.3.0
 pandas>=2.2.0
 python-jose[cryptography]>=3.3.0
 python-dotenv>=1.0.0

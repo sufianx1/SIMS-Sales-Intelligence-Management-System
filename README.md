@@ -2,7 +2,7 @@
 
 An enterprise-grade, multi-tenant SaaS business solution built for multi-store retail, inventory orchestration, flexible data ingestion, and sales intelligence.
 
-[![Backend Tests](https://img.shields.io/badge/pytest-50%20passed%20(100%25)-brightgreen.svg)]()
+[![Backend Tests](https://img.shields.io/badge/pytest-64%20passed%20(100%25)-brightgreen.svg)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-0%20errors-blue.svg)]()
 [![Frontend Build](https://img.shields.io/badge/Vite%20Build-Passing-success.svg)]()
 [![Database](https://img.shields.io/badge/MongoDB-Multi--Tenant-green.svg)]()
@@ -83,8 +83,8 @@ cd backend
 # Install dependencies
 pip install -r requirements.txt
 
-# Run deterministic demo seed
-python -m app.db.seed
+# Run deterministic demo seed or reset
+python scripts/reset_demo.py
 
 # Start FastAPI development server
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
@@ -124,17 +124,18 @@ platform win32 -- Python 3.13.5, pytest-8.3.3, pluggy-1.6.0
 rootdir: C:\Users\Sufian\Desktop\Sales management system\backend
 configfile: pytest.ini
 
-backend\tests\test_auth_api.py ........                                  [ 16%]
-backend\tests\test_business_apis.py .....                                [ 26%]
-backend\tests\test_health.py ..                                          [ 30%]
-backend\tests\test_import_api.py ......                                  [ 42%]
-backend\tests\test_integrations_api.py ...                               [ 48%]
-backend\tests\test_inventory_api.py ..........                           [ 68%]
-backend\tests\test_security.py ...                                       [ 74%]
-backend\tests\test_tenant_dependency.py .....                            [ 84%]
+backend\tests\test_auth_api.py ........                                  [ 12%]
+backend\tests\test_business_apis.py ......                               [ 21%]
+backend\tests\test_health.py ..                                          [ 25%]
+backend\tests\test_import_api.py .......                                 [ 35%]
+backend\tests\test_integrations_api.py ...                               [ 40%]
+backend\tests\test_inventory_api.py ..........                           [ 56%]
+backend\tests\test_production_hardening.py .............                 [ 76%]
+backend\tests\test_security.py ...                                       [ 81%]
+backend\tests\test_tenant_dependency.py .....                            [ 89%]
 backend\tests\test_tenant_isolation.py ........                          [100%]
 
-============================= 50 passed in 19.93s =============================
+============================= 64 passed in 14.50s =============================
 ```
 
 ---

@@ -11,10 +11,10 @@ from pydantic import BaseModel, Field
 
 class OrderLineCreate(BaseModel):
     product_id: str = Field(min_length=1, max_length=20, description="Product SKU code")
-    quantity: int = Field(ge=1, description="Quantity sold")
-    sales: float = Field(ge=0.0, description="Total line sales amount")
+    quantity: int = Field(default=1, ge=1, description="Quantity sold")
+    sales: Optional[float] = Field(default=0.0, ge=0.0, description="Total line sales amount")
     discount: float = Field(default=0.0, ge=0.0, le=1.0, description="Discount percentage (0.0 to 1.0)")
-    profit: float = Field(description="Total line profit amount")
+    profit: Optional[float] = Field(default=0.0, description="Total line profit amount")
 
 
 class OrderLineResponse(BaseModel):

@@ -1,277 +1,204 @@
-# Database Design Proposal: Multi-Tenant Sales Management & Analytics System
+# Database Design Specification: SIMS MongoDB Document Architecture
 
-## 1. Overview & Objectives
+## 1. Overview & Architecture Strategy
 
-The database architecture is built for **Microsoft SQL Server** (`SalesManagementDB`). It provides:
-1. **Multi-Tenancy**: Data isolation across distinct commercial organizations via `CompanyID`.
-2. **Hierarchical Scoping**: Companies own one or more physical or regional `Stores`.
-3. **Referential Integrity**: Strict primary and foreign key constraints, including composite foreign keys preventing cross-tenant leakage.
-4. **Financial Consistency**: Precise decimal handling (`DECIMAL(10,2)` for currency and `DECIMAL(5,2)` for discounts) avoiding floating-point rounding errors.
-5. **Auditing & Timestamps**: UTC creation/update timestamps and structured action logs.
+SIMS utilizes a **MongoDB** document-based data layer architected specifically for multi-tenant retail operations, high-throughput CSV data ingestion, and multi-dimensional analytical aggregation.
+
+### Key Architectural Decisions
+
+1. **Shared-Database, Tagged Multi-Tenancy**: All tenants share a single database, with every business document carrying an indexed `company_id`.
+2. **Denormalized Line Items**: Orders embed their itemized lines as a subdocument array (`lines[]`), ensuring atomic order creation without multi-table relational joins.
+3. **Compound Unique Indexes**: Uniqueness is enforced at the tenant boundary (e.g., `(company_id, product_id)`, `(company_id, order_id)`).
+4. **Time-To-Live (TTL) Indexes**: Used for automatic maintenance of ephemeral records (revoked JWT tokens and rate-limiting login attempts).
+5. **Driver & Mocking Layer**: Official `pymongo` driver with automatic `mongomock` in-memory fallback for test isolation.
 
 ---
 
-## 2. Entity-Relationship Diagram (ERD)
+## 2. Entity-Relationship & Collection Model
 
 ```mermaid
 erDiagram
-    Companies ||--o{ Stores : "operates (CompanyID)"
-    Companies ||--o{ Customers : "owns (CompanyID)"
-    Companies ||--o{ Products : "catalogs (CompanyID)"
-    Companies ||--o{ Orders : "processes (CompanyID)"
-    Companies ||--o{ UserCompanies : "has members (CompanyID)"
+    companies ||--o{ stores : "operates"
+    companies ||--o{ memberships : "employs"
+    users ||--o{ memberships : "belongs to"
+    companies ||--o{ products : "catalogs"
+    companies ||--o{ customers : "serves"
+    companies ||--o{ orders : "processes"
+    stores ||--o{ inventory : "stocks"
+    products ||--o{ inventory : "stocked as"
+    companies ||--o{ inventory_movements : "audits"
+    companies ||--o{ raw_imports : "uploads"
+    raw_imports ||--o{ raw_import_rows : "contains"
+    companies ||--o{ integrations : "configures"
+    integrations ||--o{ sync_logs : "records"
 
-    Stores ||--o{ Orders : "fulfills (StoreID, CompanyID)"
-    Stores ||--o{ UserCompanies : "assigns (StoreID, CompanyID)"
-
-    Users ||--o{ UserCompanies : "participates in (UserID)"
-    Roles ||--o{ UserCompanies : "assigned as (RoleID)"
-    Roles ||--|{ RolePermissions : "contains (RoleID)"
-    Permissions ||--|{ RolePermissions : "granted in (PermissionID)"
-
-    Customers ||--o{ Orders : "places (CustomerID)"
-    Orders ||--|{ OrderDetails : "contains lines (OrderID)"
-    Products ||--|{ OrderDetails : "item in (ProductID)"
-
-    Companies {
-        int CompanyID PK "Identity"
-        nvarchar(150) CompanyName "NOT NULL"
-        bit IsActive "DEFAULT 1"
-        datetime2 CreatedAt "DEFAULT SYSUTCDATETIME()"
+    orders {
+        string order_id PK
+        int company_id FK
+        int store_id FK
+        string customer_id FK
+        string order_date
+        double total_sales
+        double total_cost
+        double total_profit
+        int total_quantity
+        array lines "embedded line items"
     }
 
-    Stores {
-        int StoreID PK "Identity"
-        int CompanyID FK "NOT NULL"
-        nvarchar(150) StoreName "NOT NULL"
-        nvarchar(255) Location "NULL"
-        bit IsActive "DEFAULT 1"
-        datetime2 CreatedAt "DEFAULT SYSUTCDATETIME()"
+    products {
+        string product_id PK
+        int company_id FK
+        string product_name
+        string sku
+        string category
+        double unit_cost
+        double unit_price
     }
 
-    Users {
-        int UserID PK "Identity"
-        nvarchar(150) Name "NOT NULL"
-        nvarchar(255) Email "NOT NULL, UNIQUE"
-        nvarchar(255) PasswordHash "NOT NULL"
-        bit IsActive "DEFAULT 1"
-        bit IsSystemAdmin "DEFAULT 0"
-        datetime2 CreatedAt "DEFAULT SYSUTCDATETIME()"
-    }
-
-    UserCompanies {
-        int UserCompanyID PK "Identity"
-        int UserID FK "NOT NULL"
-        int CompanyID FK "NOT NULL"
-        int RoleID FK "NOT NULL"
-        int StoreID FK "NULL"
-        bit IsActive "DEFAULT 1"
-    }
-
-    Roles {
-        int RoleID PK
-        nvarchar(50) RoleName "NOT NULL, UNIQUE"
-    }
-
-    Permissions {
-        int PermissionID PK
-        nvarchar(50) PermissionName "NOT NULL, UNIQUE"
-    }
-
-    RolePermissions {
-        int RoleID PK,FK
-        int PermissionID PK,FK
-    }
-
-    Customers {
-        varchar(20) CustomerID PK
-        nvarchar(150) CustomerName "NOT NULL"
-        varchar(50) Segment "NULL"
-        int CompanyID FK "NOT NULL"
-    }
-
-    Products {
-        varchar(20) ProductID PK
-        nvarchar(255) ProductName "NOT NULL"
-        varchar(50) Category "NULL"
-        varchar(50) SubCategory "NULL"
-        int CompanyID FK "NOT NULL"
-    }
-
-    Orders {
-        varchar(20) OrderID PK
-        date OrderDate "NOT NULL"
-        date ShipDate "NULL"
-        varchar(50) ShipMode "NULL"
-        varchar(20) CustomerID FK "NOT NULL"
-        varchar(50) Country "NULL"
-        varchar(50) City "NULL"
-        varchar(50) State "NULL"
-        varchar(20) PostalCode "NULL"
-        varchar(50) Region "NULL"
-        int CompanyID FK "NOT NULL"
-        int StoreID FK "NULL"
-    }
-
-    OrderDetails {
-        int OrderDetailID PK "Identity"
-        varchar(20) OrderID FK "NOT NULL"
-        varchar(20) ProductID FK "NOT NULL"
-        decimal(10_2) Sales "NOT NULL"
-        int Quantity "NOT NULL"
-        decimal(5_2) Discount "NOT NULL"
-        decimal(10_2) Profit "NOT NULL"
+    inventory {
+        int company_id FK
+        int store_id FK
+        string product_id FK
+        int quantity_on_hand
+        int min_threshold
     }
 ```
 
 ---
 
-## 3. Detailed Table Specifications
+## 3. Collections & Index Specifications
 
-### 3.1 Tenancy & Organizations
+### 3.1 Organization & Security
 
-#### `Companies`
-Primary tenant entity representing an enterprise organization.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `CompanyID` | `INT IDENTITY(1,1)` | `PRIMARY KEY` | Unique organization identifier |
-| `CompanyName` | `NVARCHAR(150)` | `NOT NULL` | Registered company/tenant name |
-| `IsActive` | `BIT` | `NOT NULL DEFAULT 1`| Soft-disable flag |
-| `CreatedAt` | `DATETIME2` | `NOT NULL DEFAULT SYSUTCDATETIME()` | UTC onboarding timestamp |
+#### `companies`
+- **Purpose**: Multi-tenant registry.
+- **Indexes**:
+  - `{company_id: 1}` (unique)
+  - `{code: 1}`
 
-#### `Stores`
-Physical or virtual retail outlet owned by a Company.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `StoreID` | `INT IDENTITY(1,1)` | `PRIMARY KEY` | Store identifier |
-| `CompanyID` | `INT` | `NOT NULL, FK -> Companies(CompanyID)` | Owning tenant |
-| `StoreName` | `NVARCHAR(150)` | `NOT NULL` | Branch/Store name |
-| `Location` | `NVARCHAR(255)` | `NULL` | Physical address / City / Region |
-| `IsActive` | `BIT` | `NOT NULL DEFAULT 1` | Active operational status |
-| `CreatedAt` | `DATETIME2` | `NOT NULL DEFAULT SYSUTCDATETIME()` | Creation timestamp |
+#### `stores`
+- **Purpose**: Physical or regional retail outlets.
+- **Indexes**:
+  - `{company_id: 1, store_id: 1}` (unique)
+  - `{store_id: 1}`
 
-*Composite Unique Constraint*: `(StoreID, CompanyID)` is uniquely indexed to enable composite foreign keys from `Orders` and `UserCompanies`.
+#### `users`
+- **Purpose**: Authentication credentials and platform administration flag.
+- **Indexes**:
+  - `{user_id: 1}` (unique)
+  - `{username: 1}` (unique)
+  - `{email: 1}` (unique)
 
----
+#### `memberships`
+- **Purpose**: User-Company tenant assignments, store bindings, roles, and granular permissions.
+- **Indexes**:
+  - `{user_id: 1, company_id: 1}` (unique)
+  - `{company_id: 1, store_id: 1}`
 
-### 3.2 Identity, RBAC & Memberships
+#### `revoked_tokens`
+- **Purpose**: JWT blacklist for immediate token revocation upon logout.
+- **Indexes**:
+  - `{token: 1}` (unique)
+  - `{expires_at: 1}` (TTL index, expires after `expires_at`)
 
-#### `Users`
-Application user credentials and global attributes.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `UserID` | `INT IDENTITY(1,1)` | `PRIMARY KEY` | Unique user identity |
-| `Name` | `NVARCHAR(150)` | `NOT NULL` | Full display name |
-| `Email` | `NVARCHAR(255)` | `NOT NULL, UNIQUE` | Normalized login email |
-| `PasswordHash` | `NVARCHAR(255)` | `NOT NULL` | Salted SHA-256 / PBKDF2 hash string |
-| `IsActive` | `BIT` | `NOT NULL DEFAULT 1` | User active status |
-| `IsSystemAdmin` | `BIT` | `NOT NULL DEFAULT 0` | Superuser platform privilege |
-| `CreatedAt` | `DATETIME2` | `NOT NULL DEFAULT SYSUTCDATETIME()` | Account creation time |
-
-#### `UserCompanies`
-User-to-Tenant membership relationship with role assignment and optional store restriction.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `UserCompanyID` | `INT IDENTITY(1,1)` | `PRIMARY KEY` | Membership identity |
-| `UserID` | `INT` | `NOT NULL, FK -> Users(UserID)` | User reference |
-| `CompanyID` | `INT` | `NOT NULL, FK -> Companies(CompanyID)` | Tenant reference |
-| `RoleID` | `INT` | `NOT NULL, FK -> Roles(RoleID)` | Tenant-level role |
-| `StoreID` | `INT` | `NULL, FK -> Stores(StoreID)` | Optional store-level scoping |
-| `IsActive` | `BIT` | `NOT NULL DEFAULT 1` | Membership status |
-
-#### `Roles`, `Permissions`, `RolePermissions`
-- Standard RBAC schema mapping permissions (`VIEW_ORDERS`, `CREATE_ORDER`, `VIEW_REPORTS`, etc.) to roles (`Admin`, `Company Admin`, `Manager`, `Employee`, etc.).
+#### `login_attempts`
+- **Purpose**: IP and identifier tracking for rate limiting (5 attempts per 15 minutes).
+- **Indexes**:
+  - `{identifier: 1, ip_address: 1}`
+  - `{timestamp: 1}` (TTL index: 900 seconds)
 
 ---
 
-### 3.3 Sales Master & Transactional Entities
+### 3.2 Product Catalog & Inventory
 
-#### `Customers`
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `CustomerID` | `VARCHAR(20)` | `PRIMARY KEY` | Customer business code |
-| `CustomerName` | `NVARCHAR(150)` | `NOT NULL` | Full name of customer |
-| `Segment` | `VARCHAR(50)` | `NULL` | Market segment (Consumer, Corporate, Home Office) |
-| `CompanyID` | `INT` | `NOT NULL, FK -> Companies(CompanyID)` | Owning tenant |
+#### `products`
+- **Fields**: `company_id`, `product_id`, `product_name`, `sku`, `category`, `sub_category`, `unit_cost`, `unit_price`, `is_active`.
+- **Indexes**:
+  - `{company_id: 1, product_id: 1}` (unique)
+  - `{company_id: 1, sku: 1}`
+  - `{company_id: 1, category: 1}`
 
-#### `Products`
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `ProductID` | `VARCHAR(20)` | `PRIMARY KEY` | SKU / Product identifier |
-| `ProductName` | `NVARCHAR(255)` | `NOT NULL` | Item description |
-| `Category` | `VARCHAR(50)` | `NULL` | High-level category (Technology, Furniture, etc.) |
-| `SubCategory` | `VARCHAR(50)` | `NULL` | Granular grouping (Phones, Chairs, etc.) |
-| `CompanyID` | `INT` | `NOT NULL, FK -> Companies(CompanyID)` | Owning tenant |
+#### `inventory`
+- **Fields**: `company_id`, `store_id`, `product_id`, `quantity_on_hand`, `min_threshold`.
+- **Indexes**:
+  - `{company_id: 1, store_id: 1, product_id: 1}` (unique)
+  - `{company_id: 1, store_id: 1}`
 
-#### `Orders`
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `OrderID` | `VARCHAR(20)` | `PRIMARY KEY` | Unique transaction order code |
-| `OrderDate` | `DATE` | `NOT NULL` | Transaction date |
-| `ShipDate` | `DATE` | `NULL` | Dispatch date |
-| `ShipMode` | `VARCHAR(50)` | `NULL` | Delivery method |
-| `CustomerID` | `VARCHAR(20)` | `NOT NULL, FK -> Customers(CustomerID)` | Buyer |
-| `Country` | `VARCHAR(50)` | `NULL` | Geographic country |
-| `City` | `VARCHAR(50)` | `NULL` | Delivery city |
-| `State` | `VARCHAR(50)` | `NULL` | Delivery state/province |
-| `PostalCode` | `VARCHAR(20)` | `NULL` | Postal code |
-| `Region` | `VARCHAR(50)` | `NULL` | Geographic region (West, East, Central, South) |
-| `CompanyID` | `INT` | `NOT NULL, FK -> Companies(CompanyID)` | Owning tenant |
-| `StoreID` | `INT` | `NULL` | Associated branch/store |
-
-*Integrity Constraints*:
-- `FOREIGN KEY (CompanyID) REFERENCES Companies(CompanyID)`
-- `FOREIGN KEY (StoreID, CompanyID) REFERENCES Stores(StoreID, CompanyID)`
-
-#### `OrderDetails`
-Line items associated with orders.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `OrderDetailID` | `INT IDENTITY(1,1)` | `PRIMARY KEY` | Line item unique ID |
-| `OrderID` | `VARCHAR(20)` | `NOT NULL, FK -> Orders(OrderID)` | Parent order |
-| `ProductID` | `VARCHAR(20)` | `NOT NULL, FK -> Products(ProductID)` | Item SKU |
-| `Sales` | `DECIMAL(10,2)` | `NOT NULL` | Net line transaction revenue |
-| `Quantity` | `INT` | `NOT NULL` | Quantity purchased |
-| `Discount` | `DECIMAL(5,2)` | `NOT NULL` | Discount applied (0.00 to 1.00) |
-| `Profit` | `DECIMAL(10,2)` | `NOT NULL` | Net profit generated on line |
+#### `inventory_movements`
+- **Fields**: `movement_id`, `company_id`, `from_store_id`, `to_store_id`, `product_id`, `quantity`, `movement_type` (RECEIPT/TRANSFER/ADJUSTMENT), `timestamp`, `performed_by`.
+- **Indexes**:
+  - `{movement_id: 1}` (unique)
+  - `{company_id: 1, timestamp: -1}`
+  - `{company_id: 1, product_id: 1}`
 
 ---
 
-### 3.4 Auditing & Staging
+### 3.3 Sales & Customers
 
-#### `AuditLogs`
-Tracks security-sensitive events, tenant membership changes, and administrative actions.
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `AuditID` | `INT IDENTITY(1,1)` | `PRIMARY KEY` | Log identifier |
-| `UserID` | `INT` | `NULL, FK -> Users(UserID)` | Actor |
-| `CompanyID` | `INT` | `NULL, FK -> Companies(CompanyID)` | Scoped tenant |
-| `Action` | `VARCHAR(50)` | `NOT NULL` | Event tag (`LOGIN`, `CREATE_USER`, `DELETE_ORDER`) |
-| `EntityName` | `VARCHAR(50)` | `NULL` | Target entity (`Orders`, `Users`) |
-| `EntityID` | `VARCHAR(50)` | `NULL` | Record key |
-| `Details` | `NVARCHAR(MAX)` | `NULL` | JSON or text change context |
-| `IPAddress` | `VARCHAR(45)` | `NULL` | Client IP |
-| `CreatedAt` | `DATETIME2` | `NOT NULL DEFAULT SYSUTCDATETIME()` | UTC event timestamp |
+#### `customers`
+- **Fields**: `customer_id`, `company_id`, `customer_name`, `segment`, `email`, `phone`, `city`, `state`, `postal_code`, `region`.
+- **Indexes**:
+  - `{company_id: 1, customer_id: 1}` (unique)
+  - `{company_id: 1, customer_name: 1}`
 
-#### `RawSalesData` (Staging Table)
-Denormalized staging buffer for Superstore CSV ETL pipeline validation before atomic insertion.
+#### `orders`
+- **Fields**: `order_id`, `company_id`, `store_id`, `customer_id`, `order_date`, `ship_date`, `ship_mode`, `total_sales`, `total_cost`, `total_profit`, `total_quantity`, `lines[]`.
+- **Embedded Lines Array**: Each element contains `line_id`, `product_id`, `product_name`, `category`, `quantity`, `unit_price`, `unit_cost`, `sales`, `discount`, `profit`.
+- **Indexes**:
+  - `{company_id: 1, order_id: 1}` (unique)
+  - `{company_id: 1, store_id: 1, order_date: -1}`
+  - `{company_id: 1, customer_id: 1}`
 
 ---
 
-## 4. Indexing Strategy
+### 3.4 Ingestion & Integrations
 
-To guarantee rapid query response times under high concurrency and millions of order rows:
+#### `raw_imports` & `raw_import_rows`
+- **Purpose**: Path A exploratory ingestion preserving all source columns without data loss.
+- **Indexes**:
+  - `raw_imports`: `{company_id: 1, import_id: 1}` (unique)
+  - `raw_import_rows`: `{company_id: 1, import_id: 1, row_index: 1}` (unique)
 
-1. **Tenant Filtering Indexes**:
-   - `IX_Orders_CompanyID_OrderDate ON Orders(CompanyID, OrderDate DESC) INCLUDE (CustomerID, StoreID, Region)`
-   - `IX_Customers_CompanyID ON Customers(CompanyID) INCLUDE (CustomerName, Segment)`
-   - `IX_Products_CompanyID ON Products(CompanyID) INCLUDE (ProductName, Category, SubCategory)`
-2. **Line Item Aggregation Indexes**:
-   - `IX_OrderDetails_OrderID ON OrderDetails(OrderID) INCLUDE (ProductID, Sales, Quantity, Profit)`
-   - `IX_OrderDetails_ProductID ON OrderDetails(ProductID) INCLUDE (Sales, Profit)`
-3. **Composite Integrity Indexes**:
-   - `UQ_Stores_StoreID_CompanyID ON Stores(StoreID, CompanyID)`
-   - `IX_Orders_StoreID_CompanyID ON Orders(StoreID, CompanyID)`
-4. **Authentication Indexes**:
-   - `UQ_Users_Email ON Users(Email)`
-   - `IX_UserCompanies_User_Company ON UserCompanies(UserID, CompanyID) INCLUDE (RoleID, StoreID, IsActive)`
+#### `structured_imports`
+- **Purpose**: Path B ETL import audit trail with counts of created, updated, and failed records.
+- **Indexes**:
+  - `{company_id: 1, import_id: 1}` (unique)
+  - `{company_id: 1, created_at: -1}`
+
+#### `integrations` & `sync_logs`
+- **Purpose**: External connector configuration and incremental sync execution history.
+- **Indexes**:
+  - `integrations`: `{company_id: 1, integration_id: 1}` (unique)
+  - `sync_logs`: `{log_id: 1}` (unique), `{company_id: 1, integration_id: 1, started_at: -1}`
+
+---
+
+## 4. Analytical Pipeline Patterns
+
+### Consolidated Dashboard Metrics
+```json
+[
+  {"$match": {"company_id": 1, "store_id": 2}},
+  {"$group": {
+    "_id": null,
+    "total_sales": {"$sum": "$total_sales"},
+    "total_profit": {"$sum": "$total_profit"},
+    "total_orders": {"$sum": 1},
+    "total_units": {"$sum": "$total_quantity"}
+  }}
+]
+```
+
+### Category-Level Sales Aggregation
+```json
+[
+  {"$match": {"company_id": 1}},
+  {"$unwind": "$lines"},
+  {"$group": {
+    "_id": "$lines.category",
+    "total_sales": {"$sum": "$lines.sales"},
+    "total_profit": {"$sum": "$lines.profit"}
+  }},
+  {"$sort": {"total_sales": -1}}
+]
+```

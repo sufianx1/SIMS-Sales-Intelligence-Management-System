@@ -16,14 +16,25 @@ from app.schemas.auth import UserProfile, UserCompanyMembership, TokenResponse
 class AuthService:
 
     @staticmethod
-    def authenticate_user(identifier: str, password: str) -> UserProfile:
+    def authenticate_user(identifier: str, password: str, ip_address: Optional[str] = None) -> UserProfile:
         """
         Authenticates user with username or email, and password.
+        Enforces login rate limiting against brute-force attacks.
         Returns full UserProfile with permitted company memberships.
+        Raises 429 Too Many Requests if locked out.
         Raises 401 Unauthorized if invalid or inactive.
         """
+        from app.core.security import check_login_rate_limit, record_login_attempt
+
+        if not check_login_rate_limit(identifier, ip_address):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts. Please wait 15 minutes before retrying."
+            )
+
         user = UserRepository.get_by_identifier(identifier)
         if not user:
+            record_login_attempt(identifier, ip_address, success=False)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username/email or password",
@@ -31,17 +42,22 @@ class AuthService:
             )
 
         if not user["is_active"]:
+            record_login_attempt(identifier, ip_address, success=False)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User account is deactivated. Please contact your administrator."
             )
 
         if not verify_password(password, user["password_hash"]):
+            record_login_attempt(identifier, ip_address, success=False)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username/email or password",
                 headers={"WWW-Authenticate": "Bearer"}
             )
+
+        # Successful login: record success
+        record_login_attempt(identifier, ip_address, success=True)
 
         # Fetch permitted memberships
         memberships_data = UserRepository.get_memberships(

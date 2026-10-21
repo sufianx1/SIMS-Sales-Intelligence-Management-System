@@ -48,10 +48,10 @@ def get_customer(customer_id: str, context: TenantContext = Depends(get_tenant_c
 @router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
 def create_customer(
     data: CustomerCreate,
-    context: TenantContext = Depends(require_permission("CREATE_CUSTOMER"))
+    context: TenantContext = Depends(require_permission("create_customer"))
 ):
     """
-    Creates a new customer record under the active company (Requires CREATE_CUSTOMER permission).
+    Creates a new customer record under the active company (Requires create_customer permission).
     """
     return CustomerService.create_customer(context.company_id, data)
 
@@ -60,9 +60,9 @@ def create_customer(
 def update_customer(
     customer_id: str,
     data: CustomerUpdate,
-    context: TenantContext = Depends(require_permission("UPDATE_CUSTOMER"))
+    context: TenantContext = Depends(require_permission("manage_customers"))
 ):
     """
-    Updates a customer record under the active company (Requires UPDATE_CUSTOMER permission).
+    Updates a customer record under the active company (Requires manage_customers permission).
     """
     return CustomerService.update_customer(context.company_id, customer_id, data)

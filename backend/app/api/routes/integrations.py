@@ -6,7 +6,7 @@ manual synchronization triggers, and sync audit logs.
 """
 
 from typing import List
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from app.api.dependencies import get_current_user, get_tenant_context, require_permission
 from app.schemas.auth import UserProfile, TenantContext
 from app.schemas.integrations import (
@@ -72,3 +72,25 @@ def get_sync_logs(
     Retrieves chronological synchronization logs and cursor checkpoints for a connector.
     """
     return IntegrationService.get_sync_logs(context.company_id, integration_id)
+
+
+@router.post("/{integration_id}/webhook", status_code=status.HTTP_200_OK)
+async def receive_webhook(
+    integration_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_tenant_context)
+):
+    """
+    Ingests inbound event webhooks with constant-time HMAC signature verification,
+    timestamp replay protection, and event deduplication.
+    """
+    raw_body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256") or request.headers.get("X-Signature")
+    timestamp = request.headers.get("X-Timestamp")
+    return IntegrationService.process_webhook(
+        company_id=context.company_id,
+        integration_id=integration_id,
+        raw_body=raw_body,
+        signature=signature,
+        timestamp=timestamp
+    )

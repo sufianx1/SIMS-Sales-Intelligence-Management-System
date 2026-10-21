@@ -9,7 +9,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query, status
 from app.api.dependencies import get_tenant_context
 from app.schemas.auth import TenantContext
-from app.schemas.analytics import MonthlyTrendMetric
+from app.schemas.analytics import MonthlyTrendMetric, BusinessInsight
 from app.services.analytics_service import AnalyticsService
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
@@ -31,4 +31,20 @@ def get_monthly_trends(
         store_id=target_store,
         start_date=start_date,
         end_date=end_date
+    )
+
+
+@router.get("/insights", response_model=List[BusinessInsight], status_code=status.HTTP_200_OK)
+def get_explainable_insights(
+    store_id: Optional[int] = Query(None, description="Optional store filter"),
+    context: TenantContext = Depends(get_tenant_context)
+):
+    """
+    Returns explainable business insights (stockout risks, low margin categories, revenue concentration)
+    with explicit explanations, supporting records, limitations, and actionable next steps.
+    """
+    target_store = context.store_id if context.store_id else store_id
+    return AnalyticsService.get_explainable_insights(
+        company_id=context.company_id,
+        store_id=target_store
     )

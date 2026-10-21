@@ -12,6 +12,7 @@ from typing import Optional, List, Dict
 import json
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException, status
 from app.api.dependencies import get_current_user, get_tenant_context, require_permission
+from app.core.config import settings
 from app.schemas.auth import UserProfile, TenantContext
 from app.schemas.imports import (
     CsvPreviewResponse, RawImportItem, RawDatasetDetail,
@@ -23,6 +24,27 @@ from app.services.import_service import ImportService
 router = APIRouter(prefix="/imports", tags=["Data Import"])
 
 
+async def read_and_validate_csv(file: UploadFile) -> bytes:
+    """
+    Validates CSV file extension, enforces MAX_UPLOAD_SIZE_BYTES to prevent memory exhaustion,
+    and returns file content bytes.
+    """
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only CSV files are supported.")
+
+    max_size = settings.MAX_UPLOAD_SIZE_BYTES
+    content = await file.read(max_size + 1)
+    if len(content) > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds maximum allowed size of {max_size // (1024 * 1024)}MB."
+        )
+    if len(content) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
+
+    return content
+
+
 @router.post("/preview", response_model=CsvPreviewResponse, status_code=status.HTTP_200_OK)
 async def preview_csv_file(
     file: UploadFile = File(...),
@@ -32,13 +54,7 @@ async def preview_csv_file(
     Uploads a CSV file to inspect headers, data types, detected columns,
     and automatic field mapping suggestions before executing an import.
     """
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only CSV files are supported.")
-
-    content = await file.read()
-    if len(content) == 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
-
+    content = await read_and_validate_csv(file)
     return ImportService.preview_csv(content, file.filename)
 
 
@@ -56,10 +72,7 @@ async def import_raw_dataset(
     Path A: Preserves source CSV columns and rows exactly as uploaded
     for independent inspection and dataset queries.
     """
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only CSV files are supported.")
-
-    content = await file.read()
+    content = await read_and_validate_csv(file)
     target_store = store_id or context.store_id
     return ImportService.import_raw_dataset(
         file_bytes=content,
@@ -105,7 +118,8 @@ def get_raw_dataset_detail(
 async def import_structured_data(
     file: UploadFile = File(...),
     target_entity: str = Form("orders", description="Entity type: orders, products, inventory, customers"),
-    column_mapping_json: str = Form("{}", description="JSON string mapping SIMS fields to CSV column names"),
+    column_mapping_json: Optional[str] = Form(None, description="JSON string mapping SIMS fields to CSV column names"),
+    column_mappings: Optional[str] = Form(None, description="Alternative field name for mapping JSON"),
     store_id: Optional[int] = Form(None),
     current_user: UserProfile = Depends(get_current_user),
     context: TenantContext = Depends(require_permission("import_data"))
@@ -114,15 +128,13 @@ async def import_structured_data(
     Path B: Maps validated columns into structured SIMS entities
     (Orders, Products, Inventory, or Customers) with validation and deduplication.
     """
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only CSV files are supported.")
-
+    content = await read_and_validate_csv(file)
+    raw_mapping = column_mapping_json or column_mappings or "{}"
     try:
-        mapping: Dict[str, str] = json.loads(column_mapping_json) if column_mapping_json else {}
+        mapping: Dict[str, str] = json.loads(raw_mapping) if raw_mapping else {}
     except Exception:
         mapping = {}
 
-    content = await file.read()
     target_store = store_id or context.store_id
 
     return ImportService.import_structured(
@@ -151,9 +163,10 @@ def get_import_history(
 # ---------------------------------------------------------------------
 @router.post("/validate", response_model=ImportValidationSummary, status_code=status.HTTP_200_OK)
 async def validate_import_file(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    context: TenantContext = Depends(require_permission("import_data"))
 ):
-    content = await file.read()
+    content = await read_and_validate_csv(file)
     return ImportService.validate_csv(content)
 
 
@@ -162,9 +175,9 @@ async def execute_sales_import(
     file: UploadFile = File(...),
     store_id: Optional[int] = Form(None),
     current_user: UserProfile = Depends(get_current_user),
-    context: TenantContext = Depends(get_tenant_context)
+    context: TenantContext = Depends(require_permission("import_data"))
 ):
-    content = await file.read()
+    content = await read_and_validate_csv(file)
     target_store = store_id or context.store_id
     if target_store:
         from app.db.mongo import get_db

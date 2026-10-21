@@ -33,10 +33,10 @@ def get_store(store_id: int, context: TenantContext = Depends(get_tenant_context
 @router.post("", response_model=StoreResponse, status_code=status.HTTP_201_CREATED)
 def create_store(
     data: StoreCreate,
-    context: TenantContext = Depends(require_permission("MANAGE_STORES"))
+    context: TenantContext = Depends(require_permission("manage_stores"))
 ):
     """
-    Creates a new store within active tenant (Requires MANAGE_STORES permission).
+    Creates a new store within active tenant (Requires manage_stores permission).
     """
     return CompanyService.create_store(context.company_id, data)
 
@@ -45,9 +45,9 @@ def create_store(
 def update_store(
     store_id: int,
     data: StoreUpdate,
-    context: TenantContext = Depends(require_permission("MANAGE_STORES"))
+    context: TenantContext = Depends(require_permission("manage_stores"))
 ):
     """
-    Updates a store within active tenant (Requires MANAGE_STORES permission).
+    Updates a store within active tenant (Requires manage_stores permission).
     """
     return CompanyService.update_store(context.company_id, store_id, data)

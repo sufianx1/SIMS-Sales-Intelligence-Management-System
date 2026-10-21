@@ -97,40 +97,66 @@ class InventoryRepository:
         performed_by: Optional[int] = None,
         db: Optional[Database] = None
     ) -> Dict[str, Any]:
+        """
+        Adjusts inventory stock using atomic conditional operations.
+        Prevents race conditions, TOCTOU bugs, and negative inventory under concurrency.
+        """
         database = db if db is not None else get_db()
         now = datetime.now(timezone.utc).isoformat()
+        prod_id = product_id.strip()
+        inv_id = f"{company_id}-{store_id}-{prod_id}"
 
-        inv = database.inventory.find_one({"company_id": company_id, "store_id": store_id, "product_id": product_id.strip()})
-        current_qty = inv.get("quantity_on_hand", 0) if inv else 0
-        new_qty = current_qty + quantity_change
-        if new_qty < 0:
-            raise ValueError(f"Cannot adjust inventory below zero. Current stock is {current_qty}, change requested is {quantity_change}.")
+        if quantity_change < 0:
+            reduction = abs(quantity_change)
+            # Atomic conditional decrement: Only decrement if quantity_on_hand >= reduction
+            result = database.inventory.update_one(
+                {
+                    "company_id": company_id,
+                    "store_id": store_id,
+                    "product_id": prod_id,
+                    "quantity_on_hand": {"$gte": reduction}
+                },
+                {
+                    "$inc": {"quantity_on_hand": quantity_change},
+                    "$set": {"last_updated": now}
+                }
+            )
+            if result.modified_count == 0:
+                inv = database.inventory.find_one({"company_id": company_id, "store_id": store_id, "product_id": prod_id})
+                available = inv.get("quantity_on_hand", 0) if inv else 0
+                raise ValueError(
+                    f"Cannot adjust inventory below zero. Current stock is {available}, requested reduction is {reduction}."
+                )
+        else:
+            # Atomic increment / upsert
+            database.inventory.update_one(
+                {"company_id": company_id, "store_id": store_id, "product_id": prod_id},
+                {
+                    "$inc": {"quantity_on_hand": quantity_change},
+                    "$setOnInsert": {
+                        "inventory_id": inv_id,
+                        "company_id": company_id,
+                        "store_id": store_id,
+                        "product_id": prod_id,
+                        "min_threshold": 5,
+                        "max_threshold": 100
+                    },
+                    "$set": {"last_updated": now}
+                },
+                upsert=True
+            )
 
-        inv_id = f"{company_id}-{store_id}-{product_id.strip()}"
-        doc = {
-            "inventory_id": inv_id,
-            "company_id": company_id,
-            "store_id": store_id,
-            "product_id": product_id.strip(),
-            "quantity_on_hand": new_qty,
-            "min_threshold": inv.get("min_threshold", 5) if inv else 5,
-            "max_threshold": inv.get("max_threshold", 100) if inv else 100,
-            "last_updated": now
-        }
-        database.inventory.update_one(
-            {"company_id": company_id, "store_id": store_id, "product_id": product_id.strip()},
-            {"$set": doc},
-            upsert=True
-        )
+        # Retrieve updated document
+        updated_doc = database.inventory.find_one({"company_id": company_id, "store_id": store_id, "product_id": prod_id})
 
-        # Record movement
+        # Record immutable audit movement
         mov_id = f"MOV-{uuid.uuid4().hex[:8].upper()}"
         movement_doc = {
             "movement_id": mov_id,
             "company_id": company_id,
             "from_store_id": store_id if quantity_change < 0 else None,
             "to_store_id": store_id if quantity_change > 0 else None,
-            "product_id": product_id.strip(),
+            "product_id": prod_id,
             "quantity": quantity_change,
             "movement_type": "ADJUSTMENT",
             "reason": reason,
@@ -138,7 +164,14 @@ class InventoryRepository:
             "timestamp": now
         }
         database.inventory_movements.insert_one(movement_doc)
-        return doc
+        return updated_doc or {
+            "inventory_id": inv_id,
+            "company_id": company_id,
+            "store_id": store_id,
+            "product_id": prod_id,
+            "quantity_on_hand": updated_doc.get("quantity_on_hand", 0) if updated_doc else 0,
+            "last_updated": now
+        }
 
     @staticmethod
     def receive_stock(
@@ -152,45 +185,64 @@ class InventoryRepository:
         performed_by: Optional[int] = None,
         db: Optional[Database] = None
     ) -> Dict[str, Any]:
+        """
+        Receives stock from supplier, updates inventory with atomic conditional upsert,
+        recomputes weighted average cost if cost provided, and records immutable movement log.
+        """
+        if quantity <= 0:
+            raise ValueError("Received quantity must be greater than zero.")
+
         database = db if db is not None else get_db()
         now = datetime.now(timezone.utc).isoformat()
+        prod_id = product_id.strip()
+        inv_id = f"{company_id}-{store_id}-{prod_id}"
 
-        inv = database.inventory.find_one({"company_id": company_id, "store_id": store_id, "product_id": product_id.strip()})
-        current_qty = inv.get("quantity_on_hand", 0) if inv else 0
-        new_qty = current_qty + quantity
+        # Fetch current product to compute weighted-average cost
+        prod = database.products.find_one({"company_id": company_id, "product_id": prod_id})
+        current_inv = database.inventory.find_one({"company_id": company_id, "store_id": store_id, "product_id": prod_id})
+        current_qty = current_inv.get("quantity_on_hand", 0) if current_inv else 0
 
-        inv_id = f"{company_id}-{store_id}-{product_id.strip()}"
-        doc = {
-            "inventory_id": inv_id,
-            "company_id": company_id,
-            "store_id": store_id,
-            "product_id": product_id.strip(),
-            "quantity_on_hand": new_qty,
-            "min_threshold": inv.get("min_threshold", 5) if inv else 5,
-            "max_threshold": inv.get("max_threshold", 100) if inv else 100,
-            "last_updated": now
-        }
+        # Weighted Average Cost Policy
+        if unit_cost is not None and unit_cost > 0 and prod:
+            old_cost = float(prod.get("unit_cost", 0.0))
+            if current_qty > 0 and old_cost > 0:
+                weighted_cost = round(((current_qty * old_cost) + (quantity * float(unit_cost))) / (current_qty + quantity), 2)
+            else:
+                weighted_cost = round(float(unit_cost), 2)
+
+            database.products.update_one(
+                {"company_id": company_id, "product_id": prod_id},
+                {"$set": {"unit_cost": weighted_cost, "last_updated": now}}
+            )
+
+        # Atomic increment
         database.inventory.update_one(
-            {"company_id": company_id, "store_id": store_id, "product_id": product_id.strip()},
-            {"$set": doc},
+            {"company_id": company_id, "store_id": store_id, "product_id": prod_id},
+            {
+                "$inc": {"quantity_on_hand": quantity},
+                "$setOnInsert": {
+                    "inventory_id": inv_id,
+                    "company_id": company_id,
+                    "store_id": store_id,
+                    "product_id": prod_id,
+                    "min_threshold": 5,
+                    "max_threshold": 100
+                },
+                "$set": {"last_updated": now}
+            },
             upsert=True
         )
 
-        # Update product unit_cost if provided
-        if unit_cost is not None and unit_cost > 0:
-            database.products.update_one(
-                {"company_id": company_id, "product_id": product_id.strip()},
-                {"$set": {"unit_cost": float(unit_cost)}}
-            )
+        updated_doc = database.inventory.find_one({"company_id": company_id, "store_id": store_id, "product_id": prod_id})
 
-        # Record movement
+        # Record immutable receipt movement
         mov_id = f"MOV-{uuid.uuid4().hex[:8].upper()}"
         movement_doc = {
             "movement_id": mov_id,
             "company_id": company_id,
             "from_store_id": None,
             "to_store_id": store_id,
-            "product_id": product_id.strip(),
+            "product_id": prod_id,
             "quantity": quantity,
             "movement_type": "RECEIPT",
             "reason": f"Supplier Receipt: {supplier or 'Standard PO'} - {reason or ''}".strip(" -"),
@@ -198,7 +250,7 @@ class InventoryRepository:
             "timestamp": now
         }
         database.inventory_movements.insert_one(movement_doc)
-        return doc
+        return updated_doc
 
     @staticmethod
     def transfer_stock(
@@ -211,51 +263,74 @@ class InventoryRepository:
         performed_by: Optional[int] = None,
         db: Optional[Database] = None
     ) -> Dict[str, Any]:
-        database = db if db is not None else get_db()
-        now = datetime.now(timezone.utc).isoformat()
+        """
+        Performs an inter-store transfer with atomic conditional deduction and compensating rollback.
+        Ensures stock cannot be oversold concurrently and maintains transactional consistency.
+        """
+        if quantity <= 0:
+            raise ValueError("Transfer quantity must be greater than zero.")
 
         if from_store_id == to_store_id:
             raise ValueError("Origin and destination stores must be different.")
 
-        # Check origin store has enough stock
-        from_inv = database.inventory.find_one({"company_id": company_id, "store_id": from_store_id, "product_id": product_id.strip()})
-        available_qty = from_inv.get("quantity_on_hand", 0) if from_inv else 0
-        if available_qty < quantity:
+        database = db if db is not None else get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        prod_id = product_id.strip()
+
+        # Step 1: Atomic conditional deduction from origin
+        deduct_res = database.inventory.update_one(
+            {
+                "company_id": company_id,
+                "store_id": from_store_id,
+                "product_id": prod_id,
+                "quantity_on_hand": {"$gte": quantity}
+            },
+            {
+                "$inc": {"quantity_on_hand": -quantity},
+                "$set": {"last_updated": now}
+            }
+        )
+
+        if deduct_res.modified_count == 0:
+            from_inv = database.inventory.find_one({"company_id": company_id, "store_id": from_store_id, "product_id": prod_id})
+            available_qty = from_inv.get("quantity_on_hand", 0) if from_inv else 0
             raise ValueError(f"Insufficient stock at origin store. Requested: {quantity}, Available: {available_qty}")
 
-        # Decrement from origin
-        database.inventory.update_one(
-            {"company_id": company_id, "store_id": from_store_id, "product_id": product_id.strip()},
-            {"$inc": {"quantity_on_hand": -quantity}, "$set": {"last_updated": now}}
-        )
-
-        # Increment destination store
-        to_inv_id = f"{company_id}-{to_store_id}-{product_id.strip()}"
-        database.inventory.update_one(
-            {"company_id": company_id, "store_id": to_store_id, "product_id": product_id.strip()},
-            {
-                "$inc": {"quantity_on_hand": quantity},
-                "$setOnInsert": {
-                    "inventory_id": to_inv_id,
-                    "company_id": company_id,
-                    "store_id": to_store_id,
-                    "product_id": product_id.strip(),
-                    "min_threshold": 5,
-                    "max_threshold": 100
+        # Step 2: Increment destination store with compensating rollback protection
+        to_inv_id = f"{company_id}-{to_store_id}-{prod_id}"
+        try:
+            database.inventory.update_one(
+                {"company_id": company_id, "store_id": to_store_id, "product_id": prod_id},
+                {
+                    "$inc": {"quantity_on_hand": quantity},
+                    "$setOnInsert": {
+                        "inventory_id": to_inv_id,
+                        "company_id": company_id,
+                        "store_id": to_store_id,
+                        "product_id": prod_id,
+                        "min_threshold": 5,
+                        "max_threshold": 100
+                    },
+                    "$set": {"last_updated": now}
                 },
-                "$set": {"last_updated": now}
-            },
-            upsert=True
-        )
+                upsert=True
+            )
+        except Exception as dest_exc:
+            # Compensate: rollback origin deduction to preserve inventory integrity
+            database.inventory.update_one(
+                {"company_id": company_id, "store_id": from_store_id, "product_id": prod_id},
+                {"$inc": {"quantity_on_hand": quantity}, "$set": {"last_updated": now}}
+            )
+            raise RuntimeError(f"Inter-store transfer failed during destination update. Origin stock was restored: {dest_exc}")
 
-        # Traceable inter-store transfer record
+        # Step 3: Record immutable transfer movement
         mov_id = f"MOV-{uuid.uuid4().hex[:8].upper()}"
         movement_doc = {
             "movement_id": mov_id,
             "company_id": company_id,
             "from_store_id": from_store_id,
             "to_store_id": to_store_id,
-            "product_id": product_id.strip(),
+            "product_id": prod_id,
             "quantity": quantity,
             "movement_type": "TRANSFER",
             "reason": reason or "Inter-Store Stock Transfer",

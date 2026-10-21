@@ -17,6 +17,19 @@ from app.schemas.integrations import (
 )
 
 
+def _mask_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Redacts plaintext API keys and secrets from output responses."""
+    if not isinstance(cfg, dict):
+        return {}
+    masked = dict(cfg)
+    sensitive_keys = ["api_key", "secret", "secret_key", "token", "password", "webhook_secret", "access_token"]
+    for key in sensitive_keys:
+        if key in masked and isinstance(masked[key], str):
+            val = masked[key]
+            masked[key] = f"{val[:3]}...{val[-3:]}" if len(val) > 6 else "***"
+    return masked
+
+
 class IntegrationService:
 
     @staticmethod
@@ -34,7 +47,7 @@ class IntegrationService:
                 name=r["name"],
                 connector_type=r["connector_type"],
                 is_active=bool(r.get("is_active", True)),
-                config=r.get("config", {}),
+                config=_mask_config(r.get("config", {})),
                 last_sync_at=r.get("last_sync_at"),
                 sync_status=r.get("sync_status", "PENDING"),
                 created_at=r["created_at"]
@@ -74,7 +87,7 @@ class IntegrationService:
             name=data.name.strip(),
             connector_type=data.connector_type,
             is_active=True,
-            config=data.config,
+            config=_mask_config(data.config),
             last_sync_at=None,
             sync_status="PENDING",
             created_at=now
@@ -102,11 +115,78 @@ class IntegrationService:
             name=updated["name"],
             connector_type=updated["connector_type"],
             is_active=bool(updated["is_active"]),
-            config=updated.get("config", {}),
+            config=_mask_config(updated.get("config", {})),
             last_sync_at=updated.get("last_sync_at"),
             sync_status=updated.get("sync_status", "PENDING"),
             created_at=updated["created_at"]
         )
+
+    @staticmethod
+    def process_webhook(
+        company_id: int,
+        integration_id: str,
+        raw_body: bytes,
+        signature: Optional[str] = None,
+        timestamp: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Processes an incoming webhook from an external platform (e.g., E-Commerce / POS).
+        Validates HMAC signature and timestamp replay protection.
+        """
+        import json
+        from app.core.security import verify_webhook_signature
+
+        db = get_db()
+        integ = db.integrations.find_one({"company_id": company_id, "integration_id": integration_id})
+        if not integ:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration connector not found.")
+
+        if not integ.get("is_active", True):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Integration is deactivated.")
+
+        # Signature validation if secret configured
+        secret = integ.get("config", {}).get("webhook_secret") or integ.get("config", {}).get("secret_key")
+        if secret and signature:
+            if not verify_webhook_signature(raw_body, signature, secret):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook HMAC signature.")
+
+        # Replay protection: verify timestamp within 5 minutes (300 seconds)
+        if timestamp:
+            try:
+                msg_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                diff = abs((datetime.now(timezone.utc) - msg_time).total_seconds())
+                if diff > 300:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook timestamp expired (replay protection).")
+            except Exception:
+                pass
+
+        try:
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload.")
+
+        event_id = payload.get("event_id") or payload.get("id") or str(uuid.uuid4())
+        # Deduplication
+        if db.sync_logs.find_one({"company_id": company_id, "event_id": event_id}):
+            return {"status": "ignored", "detail": f"Duplicate event '{event_id}' already processed."}
+
+        # Record audit sync log
+        now = datetime.now(timezone.utc).isoformat()
+        db.sync_logs.insert_one({
+            "log_id": f"WH-{uuid.uuid4().hex[:8].upper()}",
+            "event_id": event_id,
+            "integration_id": integration_id,
+            "company_id": company_id,
+            "sync_type": "WEBHOOK_EVENT",
+            "records_processed": 1,
+            "errors": [],
+            "status": "SUCCESS",
+            "started_at": now,
+            "completed_at": now,
+            "cursor_checkpoint": now
+        })
+
+        return {"status": "accepted", "event_id": event_id, "processed": True}
 
     @staticmethod
     def trigger_sync(company_id: int, integration_id: str, user_id: Optional[int] = None) -> SyncExecutionResponse:

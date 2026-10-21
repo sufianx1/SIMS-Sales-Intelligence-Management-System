@@ -140,6 +140,7 @@ export const dashboardApi = {
       total_sales: number;
       total_profit: number;
       total_orders: number;
+      average_order_value?: number;
       total_customers: number;
       total_products: number;
     }>('/dashboard/metrics');
@@ -157,9 +158,25 @@ export const dashboardApi = {
   },
 };
 
+export interface BusinessInsight {
+  insight_id: string;
+  category: string;
+  severity: 'CRITICAL' | 'WARNING' | 'INFO';
+  title: string;
+  summary: string;
+  explanation: string;
+  supporting_data: Record<string, any>;
+  limitations: string;
+  recommended_action: string;
+}
+
 export const analyticsApi = {
   getTrends: async (params?: { start_date?: string; end_date?: string }) => {
     const res = await apiClient.get<{ month: string; sales: number; profit: number }[]>('/analytics/trends', { params });
+    return res.data;
+  },
+  getInsights: async (params?: { store_id?: number }) => {
+    const res = await apiClient.get<BusinessInsight[]>('/analytics/insights', { params });
     return res.data;
   },
 };
@@ -227,6 +244,7 @@ export const importsApi = {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('target_entity', targetEntity);
+    formData.append('column_mapping_json', JSON.stringify(columnMappings));
     formData.append('column_mappings', JSON.stringify(columnMappings));
     if (storeId) {
       formData.append('store_id', storeId.toString());

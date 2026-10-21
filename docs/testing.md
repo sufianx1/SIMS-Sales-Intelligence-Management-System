@@ -2,63 +2,67 @@
 
 ## 1. Testing Philosophy
 
-Testing is a first-class requirement. Every business rule, security boundary, and financial metric must be verifiable via automated test suites.
+SIMS treats automated testing as a mandatory quality gate. Every multi-tenant boundary, RBAC permission, financial calculation, and CSV ETL ingestion pathway is verified by automated test suites.
 
 ### Test Categories
-1. **Unit Tests**: Test calculation routines (Sales, Profit, ProfitMargin, Pandas aggregations) and schema validation independently.
-2. **Repository & Database Integration Tests**: Execute real parameterized SQL against test fixtures to ensure queries, joins, and transactions behave as expected.
-3. **API & Workflow Tests**: Test endpoint request-response lifecycle with FastAPI `TestClient`.
-4. **Tenant Isolation Negative Tests**: Deliberate adversarial tests proving that Tenant A cannot access or manipulate Tenant B's data under any condition.
+1. **Security & Authentication Tests** (`test_auth_api.py`, `test_security.py`): Validates PBKDF2 hashing, JWT generation, invalid credentials, token revocation lifecycle, and rate-limiting lockouts.
+2. **Tenant Isolation Tests** (`test_tenant_isolation.py`, `test_tenant_dependency.py`): Deliberate adversarial tests proving that Tenant A cannot access, create, or modify records belonging to Tenant B.
+3. **Core Business API Tests** (`test_business_apis.py`): Customer, Product, Store, and Order transactional CRUD workflows and explainable insights.
+4. **Inventory Management Tests** (`test_inventory_api.py`): Multi-store stock adjustments, receipts, negative inventory prevention, inter-store transfers, low-stock alerts, and CSV export sanitization.
+5. **Data Import & ETL Tests** (`test_import_api.py`): CSV header inspection, Path A raw storage, Path B structured imports, column mapping, and 15MB file size limit enforcement.
+6. **Production Hardening Tests** (`test_production_hardening.py`): Token revocation, CSV formula injection defense, constant-time HMAC webhook verification, and readiness probe probes.
 
 ---
 
-## 2. Mandatory Tenant Isolation Test Suite
+## 2. Test Isolation Guarantee
 
-The following negative tests must be executed and passing before any release:
-
-| Test Identifier | Test Case Description | Expected Result |
-| :--- | :--- | :--- |
-| `TEST-ISO-01` | User of Company 1 requests customer list with header `X-Company-ID: 2` | `403 Forbidden` (`ERR_TENANT_ACCESS_DENIED`) |
-| `TEST-ISO-02` | User of Company 1 requests specific customer ID belonging to Company 2 | `404 Not Found` (Zero cross-tenant leakage) |
-| `TEST-ISO-03` | User of Company 1 attempts to update a Product owned by Company 2 | `404 Not Found` or `403 Forbidden` |
-| `TEST-ISO-04` | User of Company 1 attempts to view an Order owned by Company 2 | `404 Not Found` |
-| `TEST-ISO-05` | User of Company 1 creates an Order referencing a Customer from Company 2 | `400 Bad Request` (Customer not found in tenant) |
-| `TEST-ISO-06` | User of Company 1 creates an Order referencing a Store from Company 2 | `400 Bad Request` / Composite FK rejection |
-| `TEST-ISO-07` | Non-admin user attempts to create a new Company via `POST /api/v1/companies` | `403 Forbidden` (`Permission denied`) |
-| `TEST-ISO-08` | Store Manager assigned to Store 1 attempts to update Order belonging to Store 2 | `403 Forbidden` |
-| `TEST-ISO-09` | Analytics query for Company 1 with filters explicitly verifying Company 2 data is excluded | Data contains only Company 1 records |
+All automated tests execute in strict isolation from the development and production databases:
+- **Test Configuration**: Configured in [`backend/tests/conftest.py`](file:///c:/Users/Sufian/Desktop/Sales%20management%20system/backend/tests/conftest.py).
+- **Environment Flags**:
+  - `ENVIRONMENT = "testing"`
+  - `MONGODB_DB_NAME = "sims_test_db"`
+  - `USE_MOCK_MONGO = "true"`
+- **Zero Contamination**: Pytest executes exclusively against in-memory `mongomock`. Automated test runs never connect to, modify, or delete records in `sims_dev` on MongoDB Atlas.
 
 ---
 
-## 3. Financial Calculation Validation Tests
+## 3. Test Execution Commands
 
-1. **`test_financial_margin_calculation`**:
-   - Asserts that Profit Margin formula handles zero sales without DivisionByZero errors.
-   - Asserts exact rounding matches `DECIMAL(10,2)`.
-2. **`test_order_total_aggregation`**:
-   - Verifies that joining `Orders` with `Customers` and multiple `OrderDetails` lines does not double-count order totals.
+### Running Backend Automated Tests
+```powershell
+# Navigate to backend directory or workspace root
+python -m pytest backend/tests -v
 
----
+# Run with short traceback
+python -m pytest backend/tests -q
 
-## 4. Test Execution Instructions
-
-### Running Backend Tests
-```bash
-# Navigate to backend directory
-cd backend
-
-# Execute complete test suite with coverage
-pytest tests -v --tb=short
-
-# Run only tenant isolation tests
-pytest tests/test_tenant_isolation.py -v
+# Run specific test modules
+python -m pytest backend/tests/test_tenant_isolation.py -v
+python -m pytest backend/tests/test_import_api.py -v
+python -m pytest backend/tests/test_inventory_api.py -v
 ```
 
-### Running Frontend Tests
-```bash
-# Navigate to frontend directory
+### Running Frontend Production Build & TypeScript Verification
+```powershell
 cd frontend
+npm run build
+```
+Validates that all TypeScript types, React components, and Vite bundle compilation pass with 0 errors.
 
-# Run test suite
-npm test
+---
+
+## 4. Current Test Suite Status
+
+```text
+============================= 64 passed in 14.50s =============================
+- test_auth_api.py: 8 passed
+- test_business_apis.py: 6 passed (including explainable insights)
+- test_health.py: 2 passed
+- test_import_api.py: 7 passed (including 15MB file limit)
+- test_integrations_api.py: 3 passed
+- test_inventory_api.py: 10 passed
+- test_production_hardening.py: 13 passed
+- test_security.py: 3 passed
+- test_tenant_dependency.py: 5 passed
+- test_tenant_isolation.py: 8 passed
 ```

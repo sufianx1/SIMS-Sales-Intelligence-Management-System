@@ -131,3 +131,16 @@ def test_path_b_structured_product_import(client: TestClient):
     assert data["success"] is True
     assert data["target_entity"] == "products"
     assert data["records_created"] + data["records_updated"] >= 1
+
+
+def test_import_file_size_limit_exceeded(client: TestClient, monkeypatch):
+    headers = get_auth_headers(client)
+    monkeypatch.setattr(settings, "MAX_UPLOAD_SIZE_BYTES", 50)
+
+    oversized_csv = ("A" * 100).encode("utf-8")
+    files = {"file": ("large.csv", io.BytesIO(oversized_csv), "text/csv")}
+
+    resp = client.post("/api/v1/imports/preview", files=files, headers=headers)
+    assert resp.status_code == 413
+    assert "File exceeds maximum allowed size" in resp.json()["detail"]
+

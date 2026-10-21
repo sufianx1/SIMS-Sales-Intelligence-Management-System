@@ -2,78 +2,70 @@
 
 ## 1. Multi-Tenant Isolation Strategy
 
-The system is designed with defense-in-depth principles to prevent any possibility of cross-tenant data access, manipulation, or information leakage.
+SIMS is engineered with defense-in-depth principles to prevent any possibility of cross-tenant data access, modification, or information leakage.
 
 ### 1.1 Never Trust Frontend Tenant Identifiers
-The client application submits the active tenant via the `X-Company-ID` HTTP header. 
+The client application transmits the active tenant context via the `X-Company-ID` HTTP request header.
 However:
 1. **The backend NEVER treats `X-Company-ID` as proof of authorization.**
 2. On every protected request, the backend dependency `get_tenant_context()`:
-   - Identifies the authenticated user from the verified JWT / session token.
-   - If the user is a `Platform Admin` (`IsSystemAdmin = 1`), access to the requested `CompanyID` is permitted.
-   - For all other users, the system inspects `UserCompanies` to ensure that `(UserID, CompanyID)` exists, has `IsActive = 1`, and extracts the user's specific `RoleID` and `StoreID` within that tenant.
-   - If the user is not an active member of that company, the request is immediately rejected with HTTP `403 Forbidden` (`ERR_TENANT_ACCESS_DENIED`).
+   - Validates and decodes the authenticated JWT bearer token.
+   - If the user is a `Platform Admin` (`is_system_admin = True`), access to any valid `company_id` is permitted for platform management.
+   - For regular users, the system inspects the `memberships` collection to verify that an active record exists for `(user_id, company_id)`.
+   - Extracts the user's specific `role_name`, `store_id`, and granular `permissions` array for that tenant.
+   - If the user is not an active member of that company, the request is immediately rejected with HTTP `403 Forbidden`.
 
 ### 1.2 Data Access Layer Scoping
-Every SQL query executed across the domain repositories explicitly enforces tenant filtering:
+Every MongoDB query and aggregation pipeline across the repository layer explicitly enforces tenant scoping:
 ```python
-# CORRECT: Always scoped with parameterized CompanyID
-cursor.execute(
-    "SELECT CustomerID, CustomerName, Segment FROM Customers WHERE CompanyID = ? AND CustomerID = ?",
-    (company_id, customer_id)
-)
+# CORRECT: Always scoped with company_id filter
+db.customers.find_one({"company_id": company_id, "customer_id": customer_id})
 
 # INCORRECT / VULNERABLE: Lacks tenant scoping
-# cursor.execute("SELECT * FROM Customers WHERE CustomerID = ?", (customer_id,))
+# db.customers.find_one({"customer_id": customer_id})
 ```
 
-### 1.3 Database Constraint Enforcement
-To provide a safety net below the application layer, composite foreign keys are enforced in SQL Server:
-- `Orders(StoreID, CompanyID)` -> `Stores(StoreID, CompanyID)`
-- Even if a bug were introduced in application code attempting to assign Store B to an Order belonging to Company A, SQL Server rejects the write at the database engine level with a foreign key violation.
+### 1.3 Cross-Tenant Reference Validation
+When business objects are created or modified, the backend validates that all referenced foreign entities belong to the active company:
+- **Order Creation**: Validates that `customer_id`, `store_id`, and every `lines[].product_id` exist in the database with matching `company_id`. Foreign entity references are rejected with HTTP `400 Bad Request`.
+- **Inventory Transfers**: Validates that both origin and destination stores belong to `company_id`.
 
 ---
 
 ## 2. Authentication & Credential Security
 
 1. **Password Hashing**:
-   - Stored passwords utilize a cryptographically secure salt (32 hex bytes) and hashing algorithm (PBKDF2-HMAC-SHA256 with 100,000+ iterations or salted SHA-256 compatible with legacy system credentials).
+   - Passwords are encrypted using PBKDF2-HMAC-SHA256 with 100,000 rounds and a random 32-byte salt.
    - Passwords are never stored in plaintext and never logged.
-2. **Token Security**:
-   - JWT tokens are signed using HMAC-SHA256 with a strong secret key (`SECRET_KEY`) loaded from environment variables.
-   - Tokens contain short lifespans (default 60 minutes).
-   - In production, authentication cookies should be configured with `HttpOnly`, `Secure` (HTTPS only), and `SameSite=Strict` or `Lax`.
-3. **No Credential Logging**:
-   - Password fields and authorization headers are scrubbed before logging.
+2. **Timing Attack Defense**:
+   - Password verification and HMAC webhook signatures use `secrets.compare_digest()` for constant-time cryptographic comparison, eliminating timing analysis vulnerabilities.
+3. **Token Management & Blacklisting**:
+   - HS256 JWT tokens include standard claims (`sub`, `exp`, `iat`) and a unique token ID (`jti`).
+   - Logging out records the token in the `revoked_tokens` collection with a MongoDB TTL index that automatically purges expired tokens.
+4. **Brute Force Defense**:
+   - Failed login attempts are tracked per identifier and client IP in the `login_attempts` collection.
+   - Accounts encountering 5 failed attempts within 15 minutes are temporarily locked out (HTTP `429 Too Many Requests`), backed by a 900-second TTL index.
 
 ---
 
-## 3. SQL Injection Defense
+## 3. Injection Defenses & Upload Hardening
 
-- All SQL queries across the entire repository layer are parameterized using `pyodbc` positional placeholders (`?`).
-- String concatenation or f-strings for SQL query parameter insertion are strictly forbidden.
+1. **NoSQL Injection Defense**:
+   - PyMongo queries use structured dictionary parameters with explicit type casting and Pydantic v2 schema validation. Raw unvalidated JSON dictionaries are never passed directly to database operators.
+2. **CSV Formula Injection Sanitization**:
+   - All exported CSV files inspect cell values and prefix any formula trigger characters (`=`, `+`, `-`, `@`, `\t`, `\r`) with a single apostrophe (`'`), preventing malicious code execution in Microsoft Excel.
+3. **Upload Memory Protection**:
+   - Import endpoints enforce `MAX_UPLOAD_SIZE_BYTES` (default: 15MB), reading up to `max_size + 1` bytes to detect overflow without buffering arbitrary-sized payloads into memory. Oversized payloads return HTTP `413 Request Entity Too Large`.
 
 ---
 
 ## 4. Role-Based Access Control (RBAC) Enforcement
 
-1. **Endpoint-Level Security**:
-   Endpoints define explicit permission dependencies:
-   ```python
-   @router.post("/orders", dependencies=[Depends(require_permission("CREATE_ORDER"))])
-   async def create_order(...):
-       ...
-   ```
-2. **Store-Level Scoping**:
-   If a user is assigned to a specific `StoreID` within `UserCompanies`, their queries automatically inherit `AND StoreID = ?` constraints, restricting their operational view to their branch.
+Endpoints define explicit permission dependencies using normalized lowercase permission keys:
+```python
+@router.post("/orders", dependencies=[Depends(require_permission("create_order"))])
+async def create_order(...):
+    ...
+```
 
----
-
-## 5. Information Leakage Prevention
-
-1. **Standardized Error Responses**:
-   Unhandled internal server errors return generic error messages to the client:
-   `{"detail": "An internal server error occurred.", "error_code": "ERR_INTERNAL"}`
-   Detailed stack traces are recorded in backend server logs, never emitted in HTTP responses.
-2. **Safe 404 vs 403 Semantics**:
-   When a user requests a record ID that belongs to another tenant, the system returns `404 Not Found` (or `403 Forbidden` according to uniform policy) without confirming whether the foreign record exists.
+Store-assigned employees inherit `store_id` constraints, restricting their operational view exclusively to their branch while company administrators access consolidated multi-store data.

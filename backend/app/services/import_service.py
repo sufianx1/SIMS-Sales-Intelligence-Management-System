@@ -105,14 +105,27 @@ class ImportService:
         store_id: Optional[int] = None,
         user_id: Optional[int] = None
     ) -> RawImportItem:
+        """
+        Ingests arbitrary raw CSV datasets without data loss.
+        Protects against MongoDB 16 MiB BSON limits by storing rows in dedicated row documents.
+        """
+        from app.core.security import sanitize_for_csv
+
         df = cls._read_csv(file_bytes)
         now = datetime.now(timezone.utc).isoformat()
         import_id = f"RAW-{uuid.uuid4().hex[:8].upper()}"
 
-        # Clean NaN values
-        records = df.fillna("").to_dict(orient="records")
+        # Clean and sanitize records against formula injection
         columns = [str(c).strip() for c in df.columns]
+        raw_records = df.fillna("").to_dict(orient="records")
+        sanitized_records = [
+            {k: sanitize_for_csv(v) for k, v in row.items()}
+            for row in raw_records
+        ]
 
+        db = get_db()
+
+        # Insert metadata document with preview sample (first 100 rows)
         doc = {
             "import_id": import_id,
             "company_id": company_id,
@@ -120,13 +133,27 @@ class ImportService:
             "filename": filename,
             "total_rows": len(df),
             "columns": columns,
-            "rows": records,
+            "rows": sanitized_records[:100],  # Bounded preview cache
             "imported_by": user_id,
             "created_at": now
         }
-
-        db = get_db()
         db.raw_imports.insert_one(doc)
+
+        # Batch insert raw rows in bounded chunks to avoid 16MB BSON overflows
+        CHUNK_SIZE = 1000
+        row_docs = []
+        for idx, row in enumerate(sanitized_records, 1):
+            row_docs.append({
+                "company_id": company_id,
+                "import_id": import_id,
+                "row_index": idx,
+                "data": row
+            })
+            if len(row_docs) >= CHUNK_SIZE:
+                db.raw_import_rows.insert_many(row_docs)
+                row_docs = []
+        if row_docs:
+            db.raw_import_rows.insert_many(row_docs)
 
         return RawImportItem(
             import_id=import_id,
@@ -164,7 +191,13 @@ class ImportService:
         if not doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Raw dataset not found.")
 
-        rows = doc.get("rows", [])
+        # Query chunked row storage if available
+        row_cursor = db.raw_import_rows.find({"company_id": company_id, "import_id": import_id}).sort("row_index", 1)
+        chunked_rows = [doc["data"] for doc in row_cursor]
+
+        rows = chunked_rows if chunked_rows else doc.get("rows", [])
+        total_rows = doc.get("total_rows", len(rows))
+
         if search:
             s_low = search.strip().lower()
             rows = [r for r in rows if any(s_low in str(v).lower() for v in r.values())]
@@ -173,7 +206,7 @@ class ImportService:
             import_id=doc["import_id"],
             filename=doc["filename"],
             columns=doc.get("columns", []),
-            total_rows=len(doc.get("rows", [])),
+            total_rows=total_rows,
             rows=rows[:limit]
         )
 

@@ -6,25 +6,25 @@
 flowchart LR
     ClientBrowser["Client Browser (HTTPS)"]
     
-    subgraph ReverseProxy["Edge / Reverse Proxy (Nginx / IIS / Cloudflare)"]
+    subgraph ReverseProxy["Edge / Reverse Proxy (Nginx / Cloudflare)"]
         SSLTermination["TLS 1.3 Termination"]
         StaticRouter["Static Router (/ -> React SPA)"]
         APIRouter["API Proxy (/api/v1 -> Backend)"]
     end
 
     subgraph AppHost["Application Host Server"]
-        UvicornWorkers["FastAPI Application (Uvicorn / Gunicorn Workers)"]
+        UvicornWorkers["FastAPI Application (Uvicorn Workers)"]
     end
 
     subgraph DBHost["Database Host"]
-        SQLCluster[("Microsoft SQL Server\nSalesManagementDB")]
+        MongoCluster[("MongoDB Atlas Cluster\nsims_dev / Production DB")]
     end
 
     ClientBrowser --> SSLTermination
     SSLTermination --> StaticRouter
     SSLTermination --> APIRouter
     APIRouter --> UvicornWorkers
-    UvicornWorkers -->|ODBC Driver 17 (Encrypted)| SQLCluster
+    UvicornWorkers -->|PyMongo Driver (TLS Encrypted)| MongoCluster
 ```
 
 ---
@@ -32,31 +32,44 @@ flowchart LR
 ## 2. Environment Configuration & Security Hardening
 
 1. **Secret Storage**:
-   - `SECRET_KEY` must be generated randomly (`openssl rand -hex 32`) and supplied via secure container/server environment variables.
-   - Never commit `.env` or secrets to source control.
+   - `SECRET_KEY` must be generated cryptographically (`openssl rand -hex 32`) with at least 32 characters and supplied via environment variables.
+   - The application enforces fast-fail startup: in `production` or `staging`, default insecure secret keys are strictly rejected.
+   - Never commit `.env` or secrets to version control.
 2. **CORS Restrictions**:
-   - `CORS_ORIGINS` in production must explicitly name the verified production frontend domains (e.g. `https://sales.company.com`).
-3. **Database Credentials**:
-   - In production Windows environments, use a dedicated Windows service account with Managed Service Identity (gMSA) or minimum-privilege SQL authentication.
+   - `CORS_ORIGINS` in production must explicitly name the verified production frontend domains (e.g. `https://sims.company.com`).
+3. **Database Credentials & Masking**:
+   - Store MongoDB connection strings in environment variables (`MONGODB_URI`).
+   - The database layer automatically masks credentials in all application log entries using regular expression sanitization (`re.sub`).
 4. **HTTPS Enforcement**:
-   - In production, set `SESSION_COOKIE_SECURE=true` and enforce HSTS headers at the reverse proxy.
+   - Enforce TLS 1.3 and HSTS headers at the edge reverse proxy.
+   - Set secure token cookies where cookie-based authentication is enabled.
 
 ---
 
-## 3. Migration & Rollout Strategy
+## 3. Database Safety, Backup & Recovery
 
-1. **Migration Verification**:
-   - Run SQL migration scripts in transaction blocks (`BEGIN TRANSACTION ... COMMIT TRANSACTION`).
-   - Test migrations against staging replicas before applying to production.
-2. **Zero-Downtime Principles**:
-   - Make additive schema changes first (new tables/columns).
-   - Deploy backend code that supports both old and new schema.
-   - Decommission obsolete columns in subsequent maintenance windows.
+1. **Automated Backups (MongoDB Atlas)**:
+   - For cloud-hosted MongoDB Atlas, enable continuous cloud backups with point-in-time recovery (PITR) and daily retention snapshots.
+2. **Self-Hosted Backup Procedures**:
+   - **Backup**:
+     ```bash
+     mongodump --uri="$MONGODB_URI" --db="$MONGODB_DB_NAME" --archive="/backups/sims_$(date +%Y%m%d).archive" --gzip
+     ```
+   - **Restore**:
+     ```bash
+     mongorestore --uri="$MONGODB_URI" --db="$MONGODB_DB_NAME" --archive="/backups/sims_20261021.archive" --gzip --drop
+     ```
+3. **Demo Reset Safety**:
+   - `scripts/reset_demo.py` is guarded: it automatically aborts if `ENVIRONMENT` is set to `production` or `staging`.
+   - Automated tests run exclusively against in-memory `mongomock` (`sims_test_db`), guaranteeing zero contamination of development or production databases.
 
 ---
 
-## 4. Health Checks & Monitoring
+## 4. Health & Readiness Probes
 
-- **Endpoint**: `GET /api/v1/health`
-- **Behavior**: Verifies connectivity to Microsoft SQL Server (`SELECT 1`).
-- **Safe Output**: Returns status `{"status": "healthy", "database": "connected"}` without exposing internal server paths, database names, or version numbers.
+- **Liveness Probe**: `GET /api/v1/health`
+  - Verifies operational liveness and reports database reachability (`status: healthy`, `database: connected`).
+  - Never exposes internal connection strings, database credentials, or server filepaths.
+- **Readiness Probe**: `GET /api/v1/ready`
+  - Executes a `ping` command against MongoDB.
+  - Returns HTTP `200 OK` when ready to receive production traffic; returns HTTP `503 Service Unavailable` if database connectivity is degraded.

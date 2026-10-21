@@ -93,7 +93,7 @@ class OrderService:
                     detail=f"Cross-Tenant Violation: Store ID {data.store_id} does not belong to active company."
                 )
 
-        # 4. Enforce Products belong to CompanyID
+        # 4. Enforce Products belong to CompanyID and snapshot authoritative financial fields
         lines_to_save = []
         for idx, line in enumerate(data.lines, 1):
             prod = db.products.find_one({"company_id": company_id, "product_id": line.product_id.strip()})
@@ -102,16 +102,37 @@ class OrderService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Cross-Tenant Violation: Line #{idx} Product '{line.product_id}' does not belong to active company."
                 )
+
+            unit_price = float(prod.get("unit_price", 0.0))
+            unit_cost = float(prod.get("unit_cost", 0.0))
+            qty = max(1, int(line.quantity))
+
+            # Handle discount normalization (e.g., 0.10 or 10.0 -> 0.10)
+            raw_discount = float(line.discount) if line.discount is not None else 0.0
+            discount_rate = (raw_discount / 100.0) if raw_discount > 1.0 else max(0.0, raw_discount)
+
+            # Determine authoritative line sales and profit
+            if line.sales is not None and float(line.sales) > 0:
+                line_sales = round(float(line.sales), 2)
+            else:
+                gross = round(unit_price * qty, 2)
+                line_sales = round(gross * (1.0 - discount_rate), 2)
+
+            cost_basis = round(unit_cost * qty, 2)
+            line_profit = round(line_sales - cost_basis, 2)
+
             lines_to_save.append({
                 "line_id": idx,
                 "product_id": line.product_id.strip(),
                 "product_name": prod.get("product_name", ""),
                 "category": prod.get("category", ""),
                 "sub_category": prod.get("sub_category", ""),
-                "sales": float(line.sales),
-                "quantity": int(line.quantity),
-                "discount": float(line.discount),
-                "profit": float(line.profit)
+                "unit_price": unit_price,
+                "unit_cost": unit_cost,
+                "sales": line_sales,
+                "quantity": qty,
+                "discount": round(discount_rate, 4),
+                "profit": line_profit
             })
 
         # 5. Insert order document into MongoDB

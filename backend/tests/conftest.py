@@ -17,6 +17,12 @@ sys.path = [p for p in sys.path if str(Path(p).resolve()) != str(ROOT_DIR.resolv
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+# Ensure test suite runs strictly in isolated test engine, protecting dev/prod data
+import os
+os.environ["ENVIRONMENT"] = "testing"
+os.environ["MONGODB_DB_NAME"] = "sims_test_db"
+os.environ["USE_MOCK_MONGO"] = "true"
+
 from app.main import app
 
 

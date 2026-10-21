@@ -1,14 +1,16 @@
-# System Architecture: Multi-Tenant Sales Management & Analytics System
+# System Architecture: SIMS (Sales Intelligence and Management System)
 
 ## 1. Executive Summary & Architecture Mission
 
-The **Enterprise Multi-Tenant Sales Management & Analytics System** is a reconstructed, full-stack enterprise web application designed to support multiple independent business organizations (companies/tenants) and their constituent retail or regional stores on a unified, high-performance infrastructure.
+**SIMS (Sales Intelligence and Management System)** is an enterprise-grade, multi-tenant business intelligence and retail operations platform. It provides consolidated multi-store management, flexible dual-path data ingestion, real-time inventory orchestration, and sales analytics for multi-store retail enterprises.
 
-The architecture combines:
-- **Presentation Layer**: React (TypeScript), Vite, Bootstrap 5, React Router, and Plotly.js for interactive analytics.
-- **Application & Service Layer**: Python FastAPI RESTful API utilizing dependency injection, Pydantic v2 validation, and Pandas for analytical aggregations.
-- **Data Access Layer**: Repository pattern with raw parameterized SQL via `pyodbc` for maximum performance, transparency, and explicit SQL Server control.
-- **Persistence Layer**: Microsoft SQL Server (`SalesManagementDB`) with a multi-tenant relational schema, composite foreign keys for store-company integrity, indexing, and transactional boundaries.
+### Core Technology Stack
+
+- **Presentation Layer**: Built with **React 18.3**, **TypeScript 5.6**, **Vite 6**, **Bootstrap 5.3**, and **Plotly.js** for interactive data visualization.
+- **Application & API Layer**: High-performance RESTful APIs built with **Python 3.13**, **FastAPI**, **Pydantic v2**, and **Pandas**.
+- **Data Access Layer**: Repository pattern using the official **PyMongo** driver (with transparent fallback to **mongomock** for automated testing and isolated local development).
+- **Persistence Layer**: **MongoDB** document database supporting tenant-isolated collections, compound unique indexes, embedded documents for line items, and analytical aggregation pipelines.
+- **Security & Authorization**: PBKDF2-HMAC-SHA256 password hashing (100,000 iterations), JWT HS256 tokens with server-side revocation tracking, login rate limiting (5 attempts per 15-minute window), and backend-enforced RBAC via `TenantContext`.
 
 ---
 
@@ -17,24 +19,25 @@ The architecture combines:
 ```mermaid
 flowchart TB
     subgraph ClientTier["Client / Presentation Tier (Browser)"]
-        ReactApp["React 19 + TypeScript SPA (Vite)"]
+        ReactApp["React 18 + TypeScript SPA (Vite)"]
         subgraph UIComponents["UI Modules"]
-            AuthUI["🔐 Auth & Tenant Selector"]
-            DashUI["📊 Executive Dashboard"]
-            OpsUI["🛒 Orders & Customers & Products"]
-            AdminUI["🏢 Companies & Stores & Users"]
-            AnalyticsUI["📈 Multi-Dimensional Analytics (Plotly.js)"]
+            AuthUI["Auth & Tenant Selector"]
+            DashUI["Executive Dashboard (KPIs, Charts, AOV)"]
+            OpsUI["Orders, Products, Customers"]
+            InvUI["Inventory & Inter-Store Transfers"]
+            ImportUI["Flexible CSV Import (Path A & Path B)"]
+            IntegUI["Integrations & Sync Logs"]
         end
-        ReactApp --> AuthUI & DashUI & OpsUI & AdminUI & AnalyticsUI
+        ReactApp --> AuthUI & DashUI & OpsUI & InvUI & ImportUI & IntegUI
     end
 
-    subgraph APITier["Backend API Tier (FastAPI / Python)"]
-        Gateway["FastAPI Application (/api/v1)"]
+    subgraph APITier["Backend API Tier (FastAPI / Python 3.13)"]
+        Gateway["FastAPI Gateway (/api/v1)"]
         subgraph Middlewares["Security & Context Pipeline"]
             CORSMW["CORS Middleware"]
-            AuthDep["JWT / Session Dependency"]
-            TenantContext["Active Tenant Resolution & Guard"]
-            RBACDep["Permission & Role Guard (RBAC)"]
+            AuthDep["JWT Guard (get_current_user)"]
+            TenantContext["Active Tenant Resolution & Guard (get_tenant_context)"]
+            RBACDep["Permission Hierarchy Guard (require_permission)"]
         end
         
         Gateway --> Middlewares
@@ -47,205 +50,99 @@ flowchart TB
             R_Cust["/customers"]
             R_Prod["/products"]
             R_Orders["/orders"]
+            R_Inv["/inventory"]
+            R_Imports["/imports (Preview, Path A, Path B)"]
+            R_Integ["/integrations"]
             R_Analytics["/analytics & /dashboard"]
-            R_Import["/imports"]
+            R_Health["/health & /ready"]
         end
         
         Middlewares --> Routers
     end
 
-    subgraph ServiceTier["Service & Business Logic Tier"]
-        CompanyService["Company & Store Service"]
-        UserService["User & RBAC Service"]
-        CustomerService["Customer Service"]
-        ProductService["Product Catalog Service"]
-        OrderService["Transactional Order Service"]
-        AnalyticsService["Analytics & Pandas Engine"]
-        ETLService["CSV Validation & Import Pipeline"]
+    subgraph ServiceTier["Domain Services Layer"]
+        AuthSvc["AuthService"]
+        InvSvc["InventoryService"]
+        OrderSvc["OrderService"]
+        ImportSvc["ImportService"]
+        IntegSvc["IntegrationService"]
+        AnalyticsSvc["AnalyticsService"]
     end
 
     Routers --> ServiceTier
 
-    subgraph DAL["Repository & Data Access Tier (pyodbc)"]
-        UnitOfWork["Database Transaction / Context Manager"]
-        CompanyRepo["Company & Store Repository"]
-        UserRepo["User & Membership Repository"]
-        CustomerRepo["Customer Repository"]
-        ProductRepo["Product Repository"]
-        OrderRepo["Order & Detail Repository"]
-        AnalyticsRepo["Analytical Query Repository"]
-    end
-
-    ServiceTier --> DAL
-
-    subgraph DBTier["Persistence Tier (Microsoft SQL Server)"]
-        SQLServer[("SalesManagementDB")]
-        subgraph MultiTenantSchema["Multi-Tenant Schema"]
-            T_Comp["Companies (Tenants)"]
-            T_Store["Stores"]
-            T_Users["Users & UserCompanies"]
-            T_Roles["Roles, Permissions, RolePermissions"]
-            T_Cust["Customers (CompanyID FK)"]
-            T_Prod["Products (CompanyID FK)"]
-            T_Ord["Orders (CompanyID FK, StoreID FK)"]
-            T_OrdDet["OrderDetails (OrderID FK, ProductID FK)"]
-            T_Audit["AuditLogs"]
-            T_Staging["RawSalesData (Staging)"]
+    subgraph DataTier["Data Tier (MongoDB)"]
+        DBEngine[("MongoDB Engine / mongomock")]
+        subgraph Collections["Tenant-Isolated Collections"]
+            C_Users["users & memberships"]
+            C_Companies["companies & stores"]
+            C_Products["products"]
+            C_Inventory["inventory & inventory_movements"]
+            C_Orders["orders (embedded lines[])"]
+            C_Customers["customers"]
+            C_Raw["raw_imports & raw_import_rows"]
+            C_Structured["structured_imports"]
+            C_Integrations["integrations & sync_logs"]
+            C_Security["revoked_tokens & login_attempts"]
         end
-        SQLServer --- MultiTenantSchema
-    end
-
-    DAL <-->|ODBC Driver 17 / Parameterized SQL| SQLServer
-```
-
----
-
-## 3. Multi-Tenancy & Data Isolation Model
-
-### 3.1 Tenancy Strategy: Shared Database, Shared Process, Row-Level Tenant Scoping
-
-We utilize a **Shared Database with Discriminator Column (`CompanyID`)** and **Composite Foreign Key Integrity** model:
-1. **Tenant Identifier**: Every core business table (`Customers`, `Products`, `Orders`, `Stores`, `UserCompanies`) possesses an indexed `CompanyID` column.
-2. **Store Scoping**: Stores belong strictly to a single Company via `Stores (StoreID, CompanyID)`.
-3. **Composite Foreign Key Constraints**:
-   - `Orders` table enforces `FOREIGN KEY (StoreID, CompanyID) REFERENCES Stores (StoreID, CompanyID)`.
-   - This physically prevents an order in Company A from referencing a store in Company B at the database engine level.
-4. **Line Item Containment**: `OrderDetails` references `Orders(OrderID)` and `Products(ProductID)`. Service-layer validation asserts that `Products.CompanyID == Orders.CompanyID` prior to insertion.
-
-### 3.2 Tenant Context Resolution Lifecycle
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Authenticated Client
-    participant API as FastAPI Gateway
-    participant Auth as Auth Dependency (get_current_user)
-    participant Tenant as Tenant Guard (get_tenant_context)
-    participant Service as Domain Service
-    participant Repo as Repository
-    participant DB as SQL Server
-
-    User->>API: HTTP GET /api/v1/orders?page=1
-    Note over User,API: Headers: Authorization: Bearer <JWT>, X-Company-ID: 1
-    API->>Auth: Decode JWT & verify user active status
-    Auth-->>API: Verified User Object (UserID=1003, IsSystemAdmin=false)
-    API->>Tenant: Resolve Active Company from X-Company-ID header
-    Tenant->>Tenant: Verify User is member of CompanyID 1 with active status
-    alt User has no active membership in Company 1
-        Tenant-->>User: 403 Forbidden: "User does not have access to requested tenant"
-    else User is authorized in Company 1
-        Tenant-->>API: TenantContext(company_id=1, role_id=1002, store_id=None, permissions=[...])
-        API->>Service: list_orders(context, filters)
-        Service->>Repo: get_orders(company_id=1, filters)
-        Repo->>DB: SELECT ... FROM Orders WHERE CompanyID = ? AND ...
-        DB-->>Repo: SQL Server Result Set
-        Repo-->>Service: Domain Entities
-        Service-->>API: Validated Pydantic Schemas
-        API-->>User: 200 OK JSON (Scoped strictly to Company 1)
+        ServiceTier --> DBEngine
+        DBEngine --- Collections
     end
 ```
 
 ---
 
-## 4. Role-Based Access Control (RBAC) Architecture
+## 3. Multi-Tenant Architecture & Data Scoping
 
-### 4.1 System Roles vs. Tenant Roles
+SIMS implements a shared-database, tenant-isolated architecture where all tenants reside in a single database, with every operational record tagged and indexed by `company_id`.
 
-1. **System Administrator (`IsSystemAdmin = 1`)**:
-   - Cross-tenant superuser.
-   - Authorized to manage companies, global system settings, and inspect all tenant boundaries.
-2. **Company Administrator (`RoleID = 1002`)**:
-   - Administrative master of their specific company.
-   - Can manage company profile, create stores, manage company users, assign tenant roles, and view all operational data.
-3. **Manager / Store Manager (`RoleID = 2`)**:
-   - Can manage orders, products, and customers within their assigned store (or all company stores if unassigned).
-4. **Sales Staff / Employee (`RoleID = 1004 / 3`)**:
-   - Operational role: can create and view orders, lookup products, and manage customers.
-5. **Read-Only Analyst**:
-   - Read-only access to dashboards, sales analytics, and operational reports.
+```text
+SIMS Platform
+  ├── Company A (e.g. Superstore - Tenant ID: 1)
+  │     ├── Store 1 (Manhattan Flagship)
+  │     ├── Store 2 (Chicago Loop)
+  │     └── Store 3 (LA Arts District)
+  ├── Company B (e.g. Nike - Tenant ID: 2)
+  │     ├── Store 4 (Nike SoHo NYC)
+  │     └── Store 5 (Nike Michigan Ave Chicago)
+  └── Company C (e.g. Puma - Tenant ID: 3)
+        ├── Store 6 (Puma Fifth Ave NYC)
+        └── Store 7 (Puma Santana Row San Jose)
+```
 
-### 4.2 Permission Mapping Matrix
-
-| Permission Code | Description | Platform Admin | Company Admin | Store Manager | Sales Staff | Read-Only Analyst |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| `MANAGE_COMPANIES` | Create/edit companies | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `MANAGE_STORES` | Create/edit company stores | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `MANAGE_USERS` | Provision & assign users | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `MANAGE_ROLES` | Configure role permissions | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `VIEW_PRODUCTS` | Read product catalog | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `CREATE_PRODUCT` | Create new catalog items | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `UPDATE_PRODUCT` | Modify existing products | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `DELETE_PRODUCT` | Deactivate/remove products | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `VIEW_CUSTOMERS` | View customer directory | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `CREATE_CUSTOMER`| Add new customer | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `UPDATE_CUSTOMER`| Modify customer info | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `DELETE_CUSTOMER`| Deactivate customer | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `VIEW_ORDERS` | View order history | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `CREATE_ORDER` | Create new sales order | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `UPDATE_ORDER` | Update order details | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `DELETE_ORDER` | Cancel / delete order | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `VIEW_REPORTS` | View dashboards & analytics | ✅ | ✅ | ✅ | ✅ | ✅ |
+### Tenancy Enforcement Rules
+1. **Header-Based Context**: All authenticated business requests supply an `X-Company-ID` header.
+2. **Membership Validation**: The backend verifies that the authenticated user possesses an active membership for the requested `company_id`.
+3. **Cross-Tenant Guarding**: Creating an order, inventory movement, or import strictly validates that store IDs, product IDs, and customer IDs belong exclusively to the active company.
+4. **Consolidated vs. Filtered Views**: Company Admins can view consolidated aggregates across all authorized stores (`store_id=None`) or filter to a specific store location. Store-assigned Employees are strictly restricted to their designated store.
 
 ---
 
-## 5. Backend Architecture (FastAPI & Python)
+## 4. Flexible Data Ingestion Architecture (Dual Path)
 
-The backend follows an explicit **Clean / Onion Layered Architecture**:
-1. **API Router Layer (`app/api/routes/`)**:
-   - Defines HTTP endpoints, routes, status codes, and OpenAPI documentation tags.
-   - Injects security and tenant dependencies.
-   - Validates incoming payloads via Pydantic schemas.
-2. **Service Layer (`app/services/`)**:
-   - Implements business logic, transaction coordination, cross-entity validation, and financial calculations.
-3. **Repository Layer (`app/repositories/`)**:
-   - Interacts with SQL Server using `pyodbc`.
-   - Executes parameterized SQL statements with safe parameter binding (`?`).
-   - Converts raw database tuples into structured domain dictionaries and DataFrames.
-4. **Database Connection & Transaction Manager (`app/db/`)**:
-   - Manages connection lifecycle and connection pooling.
-   - Provides context managers for transactional commits and automatic rollback on unhandled exceptions.
-
----
-
-## 6. Frontend Architecture (React, TypeScript, Bootstrap 5)
-
-### 6.1 Principles & Technology Stack
-- **Framework**: React 19 with TypeScript for strong static typing and contract adherence with backend schemas.
-- **Styling**: Bootstrap 5 + custom CSS variables for clean SaaS typography, spacing, and contrast.
-- **Routing**: React Router v6 with `ProtectedRoute`, `TenantRequiredRoute`, and `AdminRoute` guards.
-- **State Management**:
-  - `AuthContext`: Manages user credentials, authentication token, permitted companies/stores, and current active tenant selection.
-  - Local state for filters, pagination, and modals.
-- **Data Visualizations**: Plotly.js charts encapsulated into reusable React chart components (`SalesTrendChart`, `CategoryBarChart`, `RegionalPieChart`).
-
-### 6.2 Application Navigation Structure
-- **Public**:
-  - `/login`: Secure authentication form with show/hide password, error banners, and loading states.
-- **Tenant Context Selection**:
-  - `/select-tenant`: Company selection modal/screen for users with memberships in multiple companies.
-- **Authenticated App Shell**:
-  - `/dashboard`: KPI cards, sales distributions, top rankings.
-  - `/orders`: Filterable, paginated orders directory with line-item drilldown modal and new order creation wizard.
-  - `/customers`: Customer master with lifetime purchase metrics and order history.
-  - `/products`: Product catalog with category filters and sales drilldown.
-  - `/analytics`: Multi-dimensional slicer (Category, Segment, Region, Date Range) with monthly trend analysis.
-  - `/stores`: Store administration within active company.
-  - `/users`: User and membership management within active company.
-  - `/companies`: Platform-wide tenant management (Restricted to Platform Administrators).
-  - `/imports`: CSV validation and ETL ingestion console.
+```text
+Uploaded CSV
+    │
+    ├──► Preview & Schema Detection (/api/v1/imports/preview)
+    │      Inspects headers, data types, row counts, and auto-matches target fields
+    │
+    ├──► Path A: Raw Dataset Storage (/api/v1/imports/raw)
+    │      Preserves arbitrary source columns verbatim in raw_imports & raw_import_rows
+    │      Enables ad-hoc exploratory search without schema loss
+    │
+    └──► Path B: Structured Business ETL (/api/v1/imports/structured)
+           Transforms CSV rows into core SIMS entities (orders, products, inventory, customers)
+           Enforces column mappings, type validation, store assignment, and deduplication
+           Provides atomic rollbacks and audit logs
+```
 
 ---
 
-## 7. Metrics & Financial Calculation Formulas
+## 5. Security & Authentication Architecture
 
-To maintain strict accounting consistency across the SQL Server database, Pandas aggregation layer, and Plotly charts:
-
-1. **Line Item Sales**:
-   $$\text{Sales} = \text{Quantity} \times \text{UnitPrice} \times (1 - \text{Discount})$$
-2. **Line Item Profit**:
-   $$\text{Profit} = \text{Sales} - (\text{Quantity} \times \text{UnitCost})$$
-3. **Profit Margin (%)**:
-   $$\text{Profit Margin} = \begin{cases} \left(\frac{\text{Total Profit}}{\text{Total Sales}}\right) \times 100, & \text{if Total Sales} > 0 \\ 0, & \text{otherwise} \end{cases}$$
-4. **Order Sales Total**:
-   $$\text{Order Total} = \sum_{\text{lines}} \text{Line Sales}$$
-   *Rule: Order-level queries must aggregate across `OrderDetails` to prevent double-counting when joining orders with customer metadata.*
+1. **Password Security**: PBKDF2-HMAC-SHA256 with 100,000 rounds and random salt.
+2. **Timing Attack Defense**: Cryptographic constant-time comparison via `secrets.compare_digest()`.
+3. **JWT Tokens**: HS256 tokens embedding unique `jti` identifiers, validated against a TTL-indexed `revoked_tokens` collection upon logout.
+4. **Brute Force Protection**: Failed login tracking in `login_attempts` collection with automatic TTL expiry (900 seconds) and 5-attempt threshold.
+5. **CSV Injection Defense**: Exported CSV files sanitize all formula trigger characters (`=`, `+`, `-`, `@`) with prepended single apostrophes.
+6. **Upload Limits**: All import routes enforce `MAX_UPLOAD_SIZE_BYTES` (default: 15MB) to protect against server memory exhaustion.

@@ -436,7 +436,7 @@ def seed_database(db: Database, force: bool = False):
                 {
                     "line_id": 1, "product_id": "SUP-FUR-001", "product_name": "Executive High-Back Mesh Chair",
                     "category": "Furniture", "quantity": 2, "unit_price": 289.00, "unit_cost": 160.00,
-                    "sales": 578.00, "discount": 0.05, "profit": 229.10
+                    "sales": 549.10, "discount": 0.05, "profit": 229.10
                 }
             ],
             "total_sales": 549.10, "total_cost": 320.00, "total_profit": 229.10, "total_quantity": 2
@@ -490,7 +490,7 @@ def seed_database(db: Database, force: bool = False):
                 {
                     "line_id": 1, "product_id": "NKE-SH-001", "product_name": "Nike Air Zoom Pegasus 40",
                     "category": "Footwear", "quantity": 5, "unit_price": 139.99, "unit_cost": 65.00,
-                    "sales": 699.95, "discount": 0.10, "profit": 304.95
+                    "sales": 629.95, "discount": 0.10, "profit": 304.95
                 }
             ],
             "total_sales": 629.95, "total_cost": 325.00, "total_profit": 304.95, "total_quantity": 5

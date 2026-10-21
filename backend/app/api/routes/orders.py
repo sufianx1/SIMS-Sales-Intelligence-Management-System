@@ -62,11 +62,11 @@ def get_order(order_id: str, context: TenantContext = Depends(get_tenant_context
 @router.post("", response_model=OrderDetailResponse, status_code=status.HTTP_201_CREATED)
 def create_order(
     data: OrderCreate,
-    context: TenantContext = Depends(require_permission("CREATE_ORDER"))
+    context: TenantContext = Depends(require_permission("create_order"))
 ):
     """
     Creates an order and all constituent line items within an atomic database transaction.
-    Guarantees cross-tenant integrity on Customer, Store, and Products (Requires CREATE_ORDER).
+    Guarantees cross-tenant integrity on Customer, Store, and Products (Requires create_order).
     """
     effective_store_id = context.store_id if context.store_id else data.store_id
     if effective_store_id != data.store_id:
@@ -79,10 +79,10 @@ def create_order(
 def update_order(
     order_id: str,
     data: OrderUpdate,
-    context: TenantContext = Depends(require_permission("UPDATE_ORDER"))
+    context: TenantContext = Depends(require_permission("manage_orders"))
 ):
     """
-    Updates order dispatch and location information (Requires UPDATE_ORDER permission).
+    Updates order dispatch and location information (Requires manage_orders permission).
     """
     return OrderService.update_order(context.company_id, order_id, data)
 
@@ -90,10 +90,10 @@ def update_order(
 @router.delete("/{order_id}", status_code=status.HTTP_200_OK)
 def delete_order(
     order_id: str,
-    context: TenantContext = Depends(require_permission("DELETE_ORDER"))
+    context: TenantContext = Depends(require_permission("manage_orders"))
 ):
     """
-    Cancels and deletes an order and all line items (Requires DELETE_ORDER permission).
+    Cancels and deletes an order and all line items (Requires manage_orders permission).
     """
     OrderService.delete_order(context.company_id, order_id)
     return {"detail": f"Order '{order_id}' successfully deleted."}

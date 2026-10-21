@@ -170,3 +170,20 @@ def test_order_lifecycle_and_transaction(client: TestClient):
     # 5. Verify deleted
     get_after = client.get(f"/api/v1/orders/{order_code}", headers=headers)
     assert get_after.status_code == 404
+
+
+def test_explainable_insights_endpoint(client: TestClient):
+    headers = get_auth_headers(client, username="superstore.admin", company_id=1)
+    resp = client.get("/api/v1/analytics/insights", headers=headers)
+    assert resp.status_code == 200
+    insights = resp.json()
+    assert isinstance(insights, list)
+    assert len(insights) > 0
+    for ins in insights:
+        assert "insight_id" in ins
+        assert "category" in ins
+        assert ins["severity"] in ("CRITICAL", "WARNING", "INFO")
+        assert len(ins["explanation"]) > 0
+        assert "supporting_data" in ins
+        assert "limitations" in ins
+        assert "recommended_action" in ins

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     TEST_MONGODB_DB_NAME: str = "sims_test_db"
     USE_MOCK_MONGO: bool = False
 
+    # Rate Limiting & Security Controls
+    LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = 5
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 900
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    MAX_UPLOAD_SIZE_BYTES: int = 15 * 1024 * 1024  # 15 MB limit for file uploads
+
     # CORS
     CORS_ORIGINS: Union[List[str], str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
 
@@ -48,6 +54,19 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
 
+    def validate_runtime_security(self):
+        """Validates critical security constraints based on environment."""
+        if self.ENVIRONMENT.lower() in ("production", "staging"):
+            if "default" in self.SECRET_KEY.lower() or len(self.SECRET_KEY) < 32:
+                raise ValueError(
+                    "CRITICAL SECURITY FAILURE: Production environment requires a cryptographically strong "
+                    "SECRET_KEY with at least 32 characters and no default insecure values."
+                )
+            if self.USE_MOCK_MONGO:
+                raise ValueError(
+                    "CRITICAL CONFIGURATION ERROR: USE_MOCK_MONGO cannot be enabled in production or staging."
+                )
+
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), ".env"),
         env_file_encoding="utf-8",
@@ -56,3 +75,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+settings.validate_runtime_security()
