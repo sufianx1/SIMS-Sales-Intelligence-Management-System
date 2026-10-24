@@ -242,8 +242,9 @@ class ImportService:
         errors: List[str] = []
         now = datetime.now(timezone.utc).isoformat()
         import_id = f"STRUC-{uuid.uuid4().hex[:8].upper()}"
+        entity_norm = (target_entity or "orders").strip().lower()
 
-        if target_entity == "products":
+        if entity_norm == "products":
             col_id = field_to_col.get("product_id") or "Product ID"
             col_name = field_to_col.get("product_name") or "Product Name"
             col_cat = field_to_col.get("category") or "Category"
@@ -294,7 +295,7 @@ class ImportService:
                 else:
                     updated_count += 1
 
-        elif target_entity == "customers":
+        elif entity_norm == "customers":
             col_id = field_to_col.get("customer_id") or "Customer ID"
             col_name = field_to_col.get("customer_name") or "Customer Name"
             col_seg = field_to_col.get("segment") or "Segment"
@@ -327,7 +328,7 @@ class ImportService:
                 else:
                     updated_count += 1
 
-        elif target_entity == "inventory":
+        elif entity_norm == "inventory":
             col_pid = field_to_col.get("product_id") or "Product ID"
             col_qty = field_to_col.get("quantity") or "Quantity"
             target_store = store_id or 1
@@ -386,7 +387,7 @@ class ImportService:
             "company_id": company_id,
             "store_id": store_id,
             "import_type": "STRUCTURED_BUSINESS",
-            "target_entity": target_entity,
+            "target_entity": entity_norm,
             "filename": filename,
             "total_records": len(df),
             "status": "SUCCESS",
@@ -398,14 +399,14 @@ class ImportService:
         return StructuredImportResponse(
             import_id=import_id,
             success=True,
-            target_entity=target_entity,
+            target_entity=entity_norm,
             total_processed=len(df),
             records_created=created_count,
             records_updated=updated_count,
             errors_count=len(errors),
             errors=errors,
             duration_seconds=duration,
-            message=f"Successfully imported {created_count + updated_count} {target_entity} into company ID {company_id}."
+            message=f"Successfully imported {created_count + updated_count} {entity_norm} into company ID {company_id}."
         )
 
     # -----------------------------------------------------------------

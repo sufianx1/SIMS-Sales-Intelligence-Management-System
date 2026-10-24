@@ -167,3 +167,88 @@ def test_inventory_export_csv(client: TestClient):
     assert "text/csv" in resp.headers["content-type"]
     content = resp.text
     assert "Product ID,Product Name,SKU" in content
+
+
+def test_inventory_alerts_include_status_field(client: TestClient):
+    headers = get_auth_headers(client)
+    resp = client.get("/api/v1/inventory/alerts", headers=headers)
+    assert resp.status_code == 200
+    alerts = resp.json()
+    assert isinstance(alerts, list)
+    for a in alerts:
+        assert "severity" in a
+        assert a["severity"] in ["WARNING", "CRITICAL"]
+        assert "status" in a
+        assert a["status"] in ["LOW_STOCK", "OUT_OF_STOCK"]
+        if a["quantity_on_hand"] == 0:
+            assert a["status"] == "OUT_OF_STOCK"
+            assert a["severity"] == "CRITICAL"
+
+
+def test_get_rebalance_recommendations(client: TestClient):
+    headers = get_auth_headers(client)
+    resp = client.get("/api/v1/inventory/rebalance-recommendations", headers=headers)
+    assert resp.status_code == 200
+    recs = resp.json()
+    assert isinstance(recs, list)
+    assert len(recs) > 0
+
+    for r in recs:
+        assert "recommendation_id" in r
+        assert "from_store_id" in r
+        assert "to_store_id" in r
+        assert r["from_store_id"] != r["to_store_id"]
+        assert r["recommended_transfer_qty"] > 0
+
+        # Strict safety constraint: donor store must never violate its own safety threshold
+        assert r["projected_from_qty"] >= r["from_min_threshold"]
+        # Recipient store must improve towards its safety threshold
+        assert r["projected_to_qty"] > r["to_current_qty"]
+
+        # Explainability fields
+        assert len(r["explanation"]) > 10
+        assert len(r["why_it_matters"]) > 10
+        assert len(r["supporting_calculation"]) > 10
+        assert r["status"] == "PROPOSAL"
+
+
+def test_rebalance_recommendation_and_execution_workflow(client: TestClient):
+    headers = get_auth_headers(client)
+
+    # 1. Fetch recommendations
+    resp = client.get("/api/v1/inventory/rebalance-recommendations", headers=headers)
+    assert resp.status_code == 200
+    recs = resp.json()
+    assert len(recs) > 0
+    rec = recs[0]
+
+    from_sid = rec["from_store_id"]
+    to_sid = rec["to_store_id"]
+    pid = rec["product_id"]
+    transfer_qty = rec["recommended_transfer_qty"]
+
+    # 2. Check initial inventory levels
+    from_items = client.get(f"/api/v1/inventory?store_id={from_sid}&search={pid}", headers=headers).json()
+    to_items = client.get(f"/api/v1/inventory?store_id={to_sid}&search={pid}", headers=headers).json()
+    from_qty_before = from_items[0]["quantity_on_hand"]
+    to_qty_before = to_items[0]["quantity_on_hand"]
+
+    # 3. Execute the recommended transfer
+    transfer_payload = {
+        "from_store_id": from_sid,
+        "to_store_id": to_sid,
+        "product_id": pid,
+        "quantity": transfer_qty,
+        "reason": f"Execution of rebalance recommendation {rec['recommendation_id']}"
+    }
+    t_resp = client.post("/api/v1/inventory/transfer", json=transfer_payload, headers=headers)
+    assert t_resp.status_code == 200
+    t_data = t_resp.json()
+    assert t_data["movement_type"] == "TRANSFER"
+
+    # 4. Confirm inventory levels updated consistently on both stores
+    from_items_after = client.get(f"/api/v1/inventory?store_id={from_sid}&search={pid}", headers=headers).json()
+    to_items_after = client.get(f"/api/v1/inventory?store_id={to_sid}&search={pid}", headers=headers).json()
+    assert from_items_after[0]["quantity_on_hand"] == from_qty_before - transfer_qty
+    assert to_items_after[0]["quantity_on_hand"] == to_qty_before + transfer_qty
+

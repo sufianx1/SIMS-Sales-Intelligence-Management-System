@@ -22,14 +22,23 @@ _is_mock: bool = False
 def get_client() -> pymongo.MongoClient:
     """
     Returns the singleton MongoDB client.
-    Connects to configured MONGODB_URI, falling back to mongomock if unavailable.
+    Connects to configured MONGODB_URI.
+    Fails fast when persistent storage is required and never falls back to mongomock.
+    Falls back to mongomock only in non-persistent development/testing environments.
     """
     global _mongo_client, _is_mock
 
     if _mongo_client is not None:
         return _mongo_client
 
+    must_persist = settings.REQUIRE_PERSISTENT_DB or settings.ENVIRONMENT.lower() in ("production", "staging")
+
     if settings.USE_MOCK_MONGO:
+        if must_persist:
+            raise RuntimeError(
+                "CRITICAL CONFIGURATION CONFLICT: Persistent database is required, "
+                "but USE_MOCK_MONGO is set to True. Application startup aborted."
+            )
         import mongomock
         logger.info("Using mongomock as requested by settings.USE_MOCK_MONGO")
         _mongo_client = mongomock.MongoClient()
@@ -40,11 +49,12 @@ def get_client() -> pymongo.MongoClient:
     masked_uri = re.sub(r'://([^:]+):([^@]+)@', r'://\1:****@', settings.MONGODB_URI)
 
     try:
-        # Attempt connection with 20-second timeout for local/Atlas
+        # Attempt connection with configured timeout (default 20 seconds)
+        timeout_ms = getattr(settings, "MONGODB_TIMEOUT_MS", 20000)
         client = pymongo.MongoClient(
             settings.MONGODB_URI,
-            serverSelectionTimeoutMS=20000,
-            connectTimeoutMS=20000,
+            serverSelectionTimeoutMS=timeout_ms,
+            connectTimeoutMS=timeout_ms,
         )
         # Ping server to verify connectivity
         client.admin.command("ping")
@@ -53,11 +63,11 @@ def get_client() -> pymongo.MongoClient:
         _is_mock = False
         return _mongo_client
     except (ServerSelectionTimeoutError, PyMongoError, Exception) as exc:
-        if settings.ENVIRONMENT.lower() in ("production", "staging"):
-            logger.error(f"FATAL: Production database connection to '{masked_uri}' failed: {exc}")
+        if must_persist:
+            logger.critical(f"FATAL: Persistent database connection to '{masked_uri}' failed: {exc}")
             raise RuntimeError(
-                f"Production database connection failure: Cannot connect to live MongoDB instance at '{masked_uri}'. "
-                "Silent in-memory fallback is disabled in production to guarantee data persistence."
+                f"Persistent database connection failure: Cannot connect to live MongoDB instance at '{masked_uri}'. "
+                "Silent in-memory fallback is strictly disabled when persistent storage is required."
             ) from exc
 
         logger.warning(

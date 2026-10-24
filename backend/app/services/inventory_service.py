@@ -11,7 +11,8 @@ from app.repositories.inventory_repo import InventoryRepository
 from app.schemas.inventory import (
     InventoryItemResponse, InventoryAdjustRequest,
     InventoryReceiveRequest, InventoryTransferRequest,
-    InventoryMovementResponse, InventoryAlertResponse
+    InventoryMovementResponse, InventoryAlertResponse,
+    RebalanceRecommendationResponse
 )
 
 
@@ -145,3 +146,8 @@ class InventoryService:
     def get_alerts(company_id: int, store_id: Optional[int] = None) -> List[InventoryAlertResponse]:
         alerts = InventoryRepository.get_alerts(company_id=company_id, store_id=store_id)
         return [InventoryAlertResponse(**a) for a in alerts]
+
+    @staticmethod
+    def get_rebalance_recommendations(company_id: int, store_id: Optional[int] = None) -> List[RebalanceRecommendationResponse]:
+        recs = InventoryRepository.get_rebalance_recommendations(company_id=company_id, store_id=store_id)
+        return [RebalanceRecommendationResponse(**r) for r in recs]

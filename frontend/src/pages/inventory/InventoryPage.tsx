@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { inventoryApi, storesApi, productsApi } from '../../api';
-import { InventoryItem, InventoryMovement, InventoryAlert } from '../../types/inventory';
+import { InventoryItem, InventoryMovement, InventoryAlert, RebalanceRecommendation } from '../../types/inventory';
 import { Store } from '../../types/company';
 
 export const InventoryPage: React.FC = () => {
@@ -10,12 +10,14 @@ export const InventoryPage: React.FC = () => {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [movements, setMovements] = useState<InventoryMovement[]>([]);
   const [alerts, setAlerts] = useState<InventoryAlert[]>([]);
+  const [recommendations, setRecommendations] = useState<RebalanceRecommendation[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'stock' | 'movements' | 'alerts'>('stock');
+  const [activeTab, setActiveTab] = useState<'stock' | 'movements' | 'alerts' | 'recommendations'>('stock');
   const [loading, setLoading] = useState<boolean>(true);
+  const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
@@ -51,7 +53,7 @@ export const InventoryPage: React.FC = () => {
     setError(null);
     try {
       const storeIdNum = selectedStore === 'all' ? undefined : parseInt(selectedStore, 10);
-      const [inv, mov, alt] = await Promise.all([
+      const [inv, mov, alt, recs] = await Promise.all([
         inventoryApi.list({
           store_id: storeIdNum,
           category: categoryFilter || undefined,
@@ -59,10 +61,12 @@ export const InventoryPage: React.FC = () => {
         }),
         inventoryApi.listMovements({ store_id: storeIdNum, limit: 50 }),
         inventoryApi.getAlerts({ store_id: storeIdNum }),
+        inventoryApi.getRebalanceRecommendations({ store_id: storeIdNum }),
       ]);
       setInventory(inv);
       setMovements(mov);
       setAlerts(alt);
+      setRecommendations(recs);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch inventory data.');
     } finally {
@@ -80,6 +84,8 @@ export const InventoryPage: React.FC = () => {
 
   const handleAdjustSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await inventoryApi.adjust({
         store_id: formStoreId,
@@ -93,11 +99,15 @@ export const InventoryPage: React.FC = () => {
       loadData();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to adjust stock.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleReceiveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await inventoryApi.receive({
         store_id: formStoreId,
@@ -111,15 +121,19 @@ export const InventoryPage: React.FC = () => {
       loadData();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to receive stock.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (formStoreId === formToStoreId) {
       setError('Origin and destination stores must be different.');
       return;
     }
+    setSubmitting(true);
     try {
       await inventoryApi.transfer({
         from_store_id: formStoreId,
@@ -134,12 +148,24 @@ export const InventoryPage: React.FC = () => {
       loadData();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to transfer stock.');
+    } finally {
+      setSubmitting(false);
     }
+  };
+
+  const handleReviewRecommendation = (rec: RebalanceRecommendation) => {
+    setFormStoreId(rec.from_store_id);
+    setFormToStoreId(rec.to_store_id);
+    setFormProductId(rec.product_id);
+    setFormQuantity(rec.recommended_transfer_qty);
+    setFormReason(`Inter-store rebalancing: Transfer ${rec.recommended_transfer_qty} units from ${rec.from_store_name} to alleviate shortage at ${rec.to_store_name}`);
+    setShowTransferModal(true);
   };
 
   const resetForms = () => {
     setFormQuantity(1);
     setFormReason('');
+    setFormProductId('');
   };
 
   const totalValuation = inventory.reduce((sum, item) => sum + item.valuation, 0);
@@ -261,6 +287,29 @@ export const InventoryPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Rebalance Recommendation Banner */}
+      {recommendations.length > 0 && hasPermission('inventory_transfer') && (
+        <div className="alert alert-primary border-primary-subtle shadow-sm d-flex flex-wrap align-items-center justify-content-between mb-4">
+          <div className="d-flex align-items-center mb-2 mb-md-0">
+            <span className="fs-3 me-3">⚡</span>
+            <div>
+              <strong className="d-block text-dark">
+                Inter-Store Rebalancing Recommendations Available ({recommendations.length})
+              </strong>
+              <small className="text-muted">
+                SIMS detected deterministic opportunities to rebalance stock from branches with surplus to branches experiencing shortage.
+              </small>
+            </div>
+          </div>
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => setActiveTab('recommendations')}
+          >
+            Review Recommendations ({recommendations.length}) &rarr;
+          </button>
+        </div>
+      )}
+
       {/* Filter Toolbar */}
       <div className="card shadow-sm border-0 mb-4">
         <div className="card-body p-3">
@@ -343,6 +392,14 @@ export const InventoryPage: React.FC = () => {
             onClick={() => setActiveTab('alerts')}
           >
             ⚠️ Low & Out of Stock Alerts ({alerts.length})
+          </button>
+        </li>
+        <li className="nav-item">
+          <button
+            className={`nav-link ${activeTab === 'recommendations' ? 'active fw-bold text-primary' : ''}`}
+            onClick={() => setActiveTab('recommendations')}
+          >
+            ⚡ Rebalancing Proposals ({recommendations.length})
           </button>
         </li>
       </ul>
@@ -510,23 +567,42 @@ export const InventoryPage: React.FC = () => {
                       <td className="text-end fw-bold text-danger">{alt.quantity_on_hand}</td>
                       <td className="text-end text-muted">{alt.min_threshold}</td>
                       <td className="text-center">
-                        {alt.status === 'OUT_OF_STOCK' ? (
+                        {(alt.severity === 'CRITICAL' || alt.status === 'OUT_OF_STOCK' || alt.quantity_on_hand === 0) ? (
                           <span className="badge bg-danger">Critical: Out of Stock</span>
                         ) : (
                           <span className="badge bg-warning text-dark">Warning: Low Stock</span>
                         )}
                       </td>
                       <td className="text-end">
-                        <button
-                          className="btn btn-sm btn-primary py-0 px-2"
-                          onClick={() => {
-                            setFormStoreId(alt.store_id);
-                            setFormProductId(alt.product_id);
-                            setShowReceiveModal(true);
-                          }}
-                        >
-                          Restock
-                        </button>
+                        <div className="btn-group btn-group-sm">
+                          {(() => {
+                            const rec = recommendations.find(
+                              (r) => r.product_id === alt.product_id && r.to_store_id === alt.store_id
+                            );
+                            if (rec && hasPermission('inventory_transfer')) {
+                              return (
+                                <button
+                                  className="btn btn-sm btn-outline-primary py-0 px-2"
+                                  title={`Rebalance ${rec.recommended_transfer_qty} units from ${rec.from_store_name}`}
+                                  onClick={() => handleReviewRecommendation(rec)}
+                                >
+                                  ⚡ Rebalance ({rec.recommended_transfer_qty})
+                                </button>
+                              );
+                            }
+                            return null;
+                          })()}
+                          <button
+                            className="btn btn-sm btn-primary py-0 px-2"
+                            onClick={() => {
+                              setFormStoreId(alt.store_id);
+                              setFormProductId(alt.product_id);
+                              setShowReceiveModal(true);
+                            }}
+                          >
+                            Restock
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -534,6 +610,123 @@ export const InventoryPage: React.FC = () => {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Tab 4: Rebalancing Proposals */}
+      {activeTab === 'recommendations' && (
+        <div className="space-y-4">
+          <div className="card shadow-sm border-0 mb-3 bg-light">
+            <div className="card-body p-3">
+              <h6 className="fw-bold mb-1 text-dark">🧠 Deterministic Inventory Rebalancing Engine</h6>
+              <p className="text-muted small mb-0">
+                Identifies branches facing imminent stockout or low-stock deficits alongside branches within the same
+                company that hold verified surplus beyond their own safety thresholds. All proposals require human review
+                and preserve a complete bilateral movement audit trail upon execution.
+              </p>
+            </div>
+          </div>
+
+          {recommendations.length === 0 ? (
+            <div className="card shadow-sm border-0 p-5 text-center">
+              <span className="fs-1 text-success mb-2">✅</span>
+              <h5 className="fw-bold text-success mb-1">No Inter-Store Imbalances Detected</h5>
+              <p className="text-muted small mb-0">
+                All inventory across authorized stores is currently balanced above safety stock thresholds,
+                or no surplus branch is currently available to transfer stock without violating safety limits.
+              </p>
+            </div>
+          ) : (
+            recommendations.map((rec) => (
+              <div key={rec.recommendation_id} className="card shadow-sm border-0 mb-3 border-start border-primary border-4">
+                <div className="card-body p-4">
+                  <div className="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                    <div>
+                      <span className="badge bg-primary-subtle text-primary border border-primary-subtle me-2">
+                        Proposal #{rec.recommendation_id}
+                      </span>
+                      <span className="badge bg-secondary-subtle text-secondary border">
+                        {rec.category}
+                      </span>
+                      <h5 className="fw-bold text-dark mt-2 mb-0">{rec.summary}</h5>
+                      <small className="text-muted">Product: <strong>{rec.product_name}</strong> (SKU: <code>{rec.sku}</code>)</small>
+                    </div>
+
+                    {hasPermission('inventory_transfer') && (
+                      <button
+                        className="btn btn-primary px-3 py-2 fw-semibold"
+                        onClick={() => handleReviewRecommendation(rec)}
+                      >
+                        ⚡ Review & Execute Transfer ({rec.recommended_transfer_qty} units)
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Metrics Comparison Row */}
+                  <div className="row g-3 p-3 bg-light rounded-3 mb-3">
+                    <div className="col-12 col-md-5">
+                      <div className="p-2 border rounded bg-white">
+                        <span className="text-danger fw-bold small text-uppercase d-block mb-1">
+                          📍 Recipient Store (Shortage)
+                        </span>
+                        <div className="fw-bold text-dark">{rec.to_store_name}</div>
+                        <div className="small text-muted mt-1">
+                          Current on hand: <strong className="text-danger">{rec.to_current_qty}</strong> / Min safety: {rec.to_min_threshold}
+                        </div>
+                        <div className="small text-danger fw-semibold">
+                          Deficit: {rec.deficit_qty} unit(s) below safety stock
+                        </div>
+                        <div className="small text-success mt-1 fw-bold">
+                          &rarr; Projected after transfer: {rec.projected_to_qty} units (Meets safety threshold)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="col-12 col-md-2 d-flex flex-column align-items-center justify-content-center text-center">
+                      <span className="badge bg-primary fs-6 px-3 py-2 mb-1">
+                        &rarr; {rec.recommended_transfer_qty} Units &rarr;
+                      </span>
+                      <small className="text-muted">Proposed Rebalance</small>
+                    </div>
+
+                    <div className="col-12 col-md-5">
+                      <div className="p-2 border rounded bg-white">
+                        <span className="text-success fw-bold small text-uppercase d-block mb-1">
+                          🏢 Donor Store (Surplus)
+                        </span>
+                        <div className="fw-bold text-dark">{rec.from_store_name}</div>
+                        <div className="small text-muted mt-1">
+                          Current on hand: <strong className="text-dark">{rec.from_current_qty}</strong> / Min safety: {rec.from_min_threshold}
+                        </div>
+                        <div className="small text-success fw-semibold">
+                          Available surplus: {rec.available_surplus_qty} unit(s) above safety stock
+                        </div>
+                        <div className="small text-muted mt-1">
+                          &rarr; Projected after transfer: {rec.projected_from_qty} units (Safely above {rec.from_min_threshold})
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Explainability Accordion Details */}
+                  <div className="small text-muted">
+                    <div className="mb-1">
+                      <strong className="text-dark">Operational Context:</strong> {rec.explanation}
+                    </div>
+                    <div className="mb-1">
+                      <strong className="text-dark">Business Impact:</strong> {rec.why_it_matters}
+                    </div>
+                    <div className="mb-1">
+                      <strong className="text-dark">Deterministic Formula:</strong> <code>{rec.supporting_calculation}</code>
+                    </div>
+                    <div>
+                      <strong className="text-secondary">Audit Note:</strong> {rec.limitations}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       )}
 
@@ -605,11 +798,18 @@ export const InventoryPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="modal-footer">
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowAdjustModal(false)}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowAdjustModal(false)} disabled={submitting}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-primary">
-                    Record Adjustment
+                  <button type="submit" className="btn btn-primary" disabled={submitting}>
+                    {submitting ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" />
+                        Recording...
+                      </>
+                    ) : (
+                      'Record Adjustment'
+                    )}
                   </button>
                 </div>
               </form>
@@ -686,11 +886,18 @@ export const InventoryPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="modal-footer">
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowReceiveModal(false)}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowReceiveModal(false)} disabled={submitting}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-success">
-                    Receive Stock
+                  <button type="submit" className="btn btn-success" disabled={submitting}>
+                    {submitting ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" />
+                        Receiving...
+                      </>
+                    ) : (
+                      'Receive Stock'
+                    )}
                   </button>
                 </div>
               </form>
@@ -785,11 +992,18 @@ export const InventoryPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="modal-footer">
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowTransferModal(false)}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowTransferModal(false)} disabled={submitting}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-info text-dark">
-                    Execute Transfer
+                  <button type="submit" className="btn btn-info text-dark fw-semibold" disabled={submitting}>
+                    {submitting ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" />
+                        Executing Transfer...
+                      </>
+                    ) : (
+                      'Execute Transfer'
+                    )}
                   </button>
                 </div>
               </form>

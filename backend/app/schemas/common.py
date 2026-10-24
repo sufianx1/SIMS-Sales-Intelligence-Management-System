@@ -20,6 +20,7 @@ class ErrorResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     database: str
+    is_mock: bool = False
     version: str = "1.0.0"
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

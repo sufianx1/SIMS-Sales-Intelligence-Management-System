@@ -387,6 +387,7 @@ class InventoryRepository:
         alerts = []
         for it in items:
             severity = "CRITICAL" if it["quantity_on_hand"] == 0 else "WARNING"
+            status = "OUT_OF_STOCK" if it["quantity_on_hand"] == 0 else "LOW_STOCK"
             alerts.append({
                 "product_id": it["product_id"],
                 "product_name": it["product_name"],
@@ -395,6 +396,167 @@ class InventoryRepository:
                 "store_name": it["store_name"],
                 "quantity_on_hand": it["quantity_on_hand"],
                 "min_threshold": it["min_threshold"],
-                "severity": severity
+                "severity": severity,
+                "status": status
             })
         return sorted(alerts, key=lambda a: (0 if a["severity"] == "CRITICAL" else 1, a["quantity_on_hand"]))
+
+    @staticmethod
+    def get_rebalance_recommendations(
+        company_id: int,
+        store_id: Optional[int] = None,
+        db: Optional[Database] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Generates explainable, deterministic inter-store inventory rebalancing recommendations.
+        Identifies branches with stock deficits below minimum threshold alongside branches
+        in the same company holding safe surplus beyond their own safety threshold.
+        Enforces that donor stores never violate their own minimum safety constraints.
+        """
+        database = db if db is not None else get_db()
+        stores = list(database.stores.find({"company_id": company_id}))
+        if len(stores) < 2:
+            return []
+
+        stores_map = {s["store_id"]: s.get("store_name", f"Store #{s['store_id']}") for s in stores}
+        products_map = {p["product_id"]: p for p in database.products.find({"company_id": company_id})}
+
+        # Query all inventory items for company
+        all_inv = list(database.inventory.find({"company_id": company_id}))
+
+        # Group inventory by product_id
+        inv_by_product: Dict[str, List[Dict[str, Any]]] = {}
+        for item in all_inv:
+            pid = item["product_id"]
+            inv_by_product.setdefault(pid, []).append(item)
+
+        recommendations = []
+
+        for pid, store_items in inv_by_product.items():
+            if len(store_items) < 2:
+                continue
+
+            prod = products_map.get(pid, {})
+            pname = prod.get("product_name", pid)
+            sku = prod.get("sku", pid)
+            category = prod.get("category", "General")
+
+            # Identify deficit stores (on hand <= min_threshold or on hand == 0)
+            deficits = []
+            surpluses = []
+
+            for it in store_items:
+                qty = int(it.get("quantity_on_hand", 0))
+                min_thresh = int(it.get("min_threshold", 5))
+                sid = int(it["store_id"])
+
+                if qty < min_thresh or qty == 0:
+                    deficit_qty = max(1, min_thresh - qty)
+                    deficits.append({
+                        "store_id": sid,
+                        "store_name": stores_map.get(sid, f"Store #{sid}"),
+                        "current_qty": qty,
+                        "min_threshold": min_thresh,
+                        "deficit_qty": deficit_qty
+                    })
+                elif qty > min_thresh:
+                    available_surplus = qty - min_thresh
+                    surpluses.append({
+                        "store_id": sid,
+                        "store_name": stores_map.get(sid, f"Store #{sid}"),
+                        "current_qty": qty,
+                        "min_threshold": min_thresh,
+                        "available_surplus": available_surplus
+                    })
+
+            if not deficits or not surpluses:
+                continue
+
+            # Sort deficits by severity (lowest stock relative to min threshold first)
+            deficits.sort(key=lambda d: d["current_qty"])
+            # Sort surpluses by highest available surplus first
+            surpluses.sort(key=lambda s: s["available_surplus"], reverse=True)
+
+            for d in deficits:
+                for s in surpluses:
+                    if s["store_id"] == d["store_id"]:
+                        continue
+                    if s["available_surplus"] <= 0:
+                        continue
+
+                    needed = d["deficit_qty"]
+                    transfer_qty = min(needed, s["available_surplus"])
+
+                    if transfer_qty <= 0:
+                        continue
+
+                    # Filter by store_id if requested
+                    if store_id is not None and store_id != 0:
+                        if d["store_id"] != int(store_id) and s["store_id"] != int(store_id):
+                            continue
+
+                    proj_to = d["current_qty"] + transfer_qty
+                    proj_from = s["current_qty"] - transfer_qty
+
+                    urgency = "Critical Out-of-Stock" if d["current_qty"] == 0 else "Low Stock Shortage"
+                    summary = f"Rebalance {transfer_qty} units of '{pname}' from {s['store_name']} to {d['store_name']}"
+
+                    explanation = (
+                        f"{d['store_name']} has an active {urgency.lower()} with only {d['current_qty']} unit(s) "
+                        f"on hand against a safety threshold of {d['min_threshold']}. "
+                        f"Meanwhile, {s['store_name']} maintains {s['current_qty']} units (surplus of {s['available_surplus']} "
+                        f"above its safety threshold of {s['min_threshold']})."
+                    )
+
+                    why_it_matters = (
+                        f"Eliminates retail stockout risk and order cancellation at {d['store_name']} without "
+                        f"compromising inventory safety at {s['store_name']} or incurring expedited supplier lead-time costs."
+                    )
+
+                    rec_action = (
+                        f"Initiate an inter-store transfer of {transfer_qty} units from {s['store_name']} "
+                        f"to {d['store_name']}."
+                    )
+
+                    calc = (
+                        f"Recipient Deficit = {d['min_threshold']} (min) - {d['current_qty']} (on hand) = {needed} needed. "
+                        f"Donor Safe Surplus = {s['current_qty']} (on hand) - {s['min_threshold']} (min) = {s['available_surplus']} transferable. "
+                        f"Transfer Quantity = min({needed}, {s['available_surplus']}) = {transfer_qty} units. "
+                        f"Projected Status: {d['store_name']} reaches {proj_to} units; {s['store_name']} safely retains {proj_from} units."
+                    )
+
+                    rec_id = f"REC-{company_id}-{s['store_id']}-{d['store_id']}-{pid}"
+
+                    recommendations.append({
+                        "recommendation_id": rec_id,
+                        "company_id": company_id,
+                        "product_id": pid,
+                        "product_name": pname,
+                        "sku": sku,
+                        "category": category,
+                        "to_store_id": d["store_id"],
+                        "to_store_name": d["store_name"],
+                        "to_current_qty": d["current_qty"],
+                        "to_min_threshold": d["min_threshold"],
+                        "deficit_qty": d["deficit_qty"],
+                        "from_store_id": s["store_id"],
+                        "from_store_name": s["store_name"],
+                        "from_current_qty": s["current_qty"],
+                        "from_min_threshold": s["min_threshold"],
+                        "available_surplus_qty": s["available_surplus"],
+                        "recommended_transfer_qty": transfer_qty,
+                        "projected_to_qty": proj_to,
+                        "projected_from_qty": proj_from,
+                        "summary": summary,
+                        "explanation": explanation,
+                        "why_it_matters": why_it_matters,
+                        "recommended_action": rec_action,
+                        "supporting_calculation": calc,
+                        "limitations": "Evaluates on-hand recorded stock. Does not account for in-transit shipments or pending layaway orders.",
+                        "status": "PROPOSAL"
+                    })
+
+                    s["available_surplus"] -= transfer_qty
+                    break
+
+        return recommendations

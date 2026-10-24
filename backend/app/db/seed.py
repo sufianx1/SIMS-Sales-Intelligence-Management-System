@@ -25,6 +25,11 @@ def seed_database(db: Database, force: bool = False):
     """
     ensure_indexes(db)
 
+    # Guard against automated execution in production/staging environments
+    if settings.ENVIRONMENT.lower() in ("production", "staging") and not force:
+        logger.warning("Automated seeding aborted: Environment is production/staging. Automatic seeding of demo credentials is strictly blocked.")
+        return
+
     # Check if already seeded
     if not force and db.companies.count_documents({}) >= 3:
         logger.info("Database already contains seed companies. Skipping seed.")

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = "sims_db"
     TEST_MONGODB_DB_NAME: str = "sims_test_db"
     USE_MOCK_MONGO: bool = False
+    REQUIRE_PERSISTENT_DB: bool = False
+    AUTO_SEED_DEMO_DATA: bool = True
+    MONGODB_TIMEOUT_MS: int = 20000
 
     # Rate Limiting & Security Controls
     LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = 5
@@ -56,16 +59,23 @@ class Settings(BaseSettings):
 
     def validate_runtime_security(self):
         """Validates critical security constraints based on environment."""
+        known_insecure_keys = {
+            "default-insecure-dev-secret-key-change-in-production-32chars",
+            "sims-super-secret-development-key-change-in-production-1234567890",
+        }
         if self.ENVIRONMENT.lower() in ("production", "staging"):
-            if "default" in self.SECRET_KEY.lower() or len(self.SECRET_KEY) < 32:
+            if "default" in self.SECRET_KEY.lower() or len(self.SECRET_KEY) < 32 or self.SECRET_KEY in known_insecure_keys:
                 raise ValueError(
                     "CRITICAL SECURITY FAILURE: Production environment requires a cryptographically strong "
-                    "SECRET_KEY with at least 32 characters and no default insecure values."
+                    "SECRET_KEY with at least 32 characters and no default or example insecure values."
                 )
             if self.USE_MOCK_MONGO:
                 raise ValueError(
                     "CRITICAL CONFIGURATION ERROR: USE_MOCK_MONGO cannot be enabled in production or staging."
                 )
+            # Enforce persistent DB and disable auto-seed in production and staging
+            self.REQUIRE_PERSISTENT_DB = True
+            self.AUTO_SEED_DEMO_DATA = False
 
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), ".env"),

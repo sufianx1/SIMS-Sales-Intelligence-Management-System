@@ -15,7 +15,8 @@ from app.schemas.auth import TenantContext
 from app.schemas.inventory import (
     InventoryItemResponse, InventoryAdjustRequest,
     InventoryReceiveRequest, InventoryTransferRequest,
-    InventoryMovementResponse, InventoryAlertResponse
+    InventoryMovementResponse, InventoryAlertResponse,
+    RebalanceRecommendationResponse
 )
 from app.services.inventory_service import InventoryService
 
@@ -124,6 +125,22 @@ def get_alerts(
     """
     target_store = context.store_id if context.store_id else store_id
     return InventoryService.get_alerts(
+        company_id=context.company_id,
+        store_id=target_store
+    )
+
+
+@router.get("/rebalance-recommendations", response_model=List[RebalanceRecommendationResponse], status_code=status.HTTP_200_OK)
+def get_rebalance_recommendations(
+    store_id: Optional[int] = Query(None, description="Optional store filter"),
+    context: TenantContext = Depends(require_permission("view_inventory"))
+):
+    """
+    Returns explainable, deterministic inter-store inventory rebalancing recommendations.
+    Identifies shortage stores and matches them with branches in the same company having surplus stock.
+    """
+    target_store = context.store_id if context.store_id else store_id
+    return InventoryService.get_rebalance_recommendations(
         company_id=context.company_id,
         store_id=target_store
     )

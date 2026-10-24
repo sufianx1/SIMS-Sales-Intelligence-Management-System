@@ -88,3 +88,41 @@ class InventoryAlertResponse(BaseModel):
     quantity_on_hand: int
     min_threshold: int
     severity: str  # "WARNING" (low) or "CRITICAL" (out of stock)
+    status: str = "LOW_STOCK"  # "LOW_STOCK" or "OUT_OF_STOCK"
+
+
+class RebalanceRecommendationResponse(BaseModel):
+    recommendation_id: str
+    company_id: int
+    product_id: str
+    product_name: str
+    sku: str
+    category: str
+
+    # Deficit / Shortage Store (Recipient)
+    to_store_id: int
+    to_store_name: str
+    to_current_qty: int
+    to_min_threshold: int
+    deficit_qty: int
+
+    # Surplus Store (Donor)
+    from_store_id: int
+    from_store_name: str
+    from_current_qty: int
+    from_min_threshold: int
+    available_surplus_qty: int
+
+    # Recommended Action
+    recommended_transfer_qty: int
+    projected_to_qty: int
+    projected_from_qty: int
+
+    # Explainability & Decision Support
+    summary: str
+    explanation: str
+    why_it_matters: str
+    recommended_action: str
+    supporting_calculation: str
+    limitations: str
+    status: str = "PROPOSAL"

@@ -1,0 +1,6 @@
+Order ID,Order Date,Customer ID,Customer Name,Segment,Product ID,Product Name,Category,Sub-Category,Sales,Quantity,Discount,Profit
+SO-QA-2001,2026-10-20,CUST-901,Valid Test Customer,Consumer,SUP-TEC-002,Logitech Wireless Ergonomic Keyboard,Technology,Accessories,89.99,1,0.00,44.99
+,2026-10-21,CUST-902,Missing Order ID Record,Corporate,SUP-OFF-001,Filing Cabinet,Office Supplies,Storage,149.00,1,0.00,69.00
+SO-QA-2003,invalid-date-format,CUST-903,Invalid Date Customer,Consumer,SUP-FUR-001,Mesh Chair,Furniture,Chairs,289.00,1,0.00,129.00
+SO-QA-2004,2026-10-22,CUST-904,Formula Injection User,Corporate,SUP-OFF-002,=SUM(A1:B10) Injected Paper,Office Supplies,Paper,44.99,1,0.00,19.99
+SO-QA-2005,2026-10-23,CUST-905,Negative String Value,Consumer,SUP-TEC-001,Copier,Technology,Copiers,NOT_A_NUMBER,INVALID_QTY,0.00,0.00

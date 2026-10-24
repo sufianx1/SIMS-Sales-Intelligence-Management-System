@@ -206,6 +206,12 @@ export const inventoryApi = {
     const res = await apiClient.post<import('../types/inventory').InventoryMovement>('/inventory/transfer', data);
     return res.data;
   },
+  getRebalanceRecommendations: async (params?: { store_id?: number }) => {
+    const res = await apiClient.get<import('../types/inventory').RebalanceRecommendation[]>('/inventory/rebalance-recommendations', {
+      params,
+    });
+    return res.data;
+  },
   exportCsvUrl: (storeId?: number) => {
     const base = '/api/v1/inventory/export';
     return storeId ? `${base}?store_id=${storeId}` : base;

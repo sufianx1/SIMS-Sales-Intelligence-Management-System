@@ -1,0 +1,6 @@
+Invoice_Number,Sale_Date,Client_Account,Client_Name,Account_Type,Item_Code,Item_Title,Department,Sub_Group,Revenue_Amount,Units_Sold,Rebate_Discount,Net_Profit
+INV-9901,2026-10-10,ACC-701,Urban Outfitters Corp,Corporate,SUP-TEC-001,Canon ImageCLASS Advanced Copier,Technology,Copiers,1299.99,1,0.00,449.99
+INV-9902,2026-10-11,ACC-702,Kensington Studios,Corporate,SUP-TEC-002,Logitech Wireless Ergonomic Keyboard,Technology,Accessories,269.97,3,0.00,134.97
+INV-9903,2026-10-12,ACC-703,Northwestern Health,Corporate,SUP-FUR-001,Executive High-Back Mesh Chair,Furniture,Chairs,1156.00,4,0.00,516.00
+INV-9904,2026-10-13,ACC-704,Sarah Jenkins,Consumer,SUP-FUR-002,Adjustable Standing Desk 60x30,Furniture,Tables,999.00,2,0.00,419.00
+INV-9905,2026-10-14,ACC-705,Marcus Vance,Consumer,SUP-OFF-002,Premium Multi-Purpose Paper (10 Reams),Office Supplies,Paper,179.96,4,0.00,79.96

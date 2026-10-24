@@ -297,3 +297,75 @@ def test_profit_by_category_ranking():
     if len(profit_data) >= 2:
         for idx in range(len(profit_data) - 1):
             assert profit_data[idx]["total_profit"] >= profit_data[idx + 1]["total_profit"]
+
+
+def test_persistent_db_requirement_prevents_silent_mock_fallback(monkeypatch):
+    """Validates that REQUIRE_PERSISTENT_DB blocks silent fallback to mongomock."""
+    from app.db import mongo
+
+    orig_client = mongo._mongo_client
+    orig_mock = mongo._is_mock
+
+    try:
+        # Test 1: If REQUIRE_PERSISTENT_DB=True and USE_MOCK_MONGO=True -> must raise RuntimeError
+        mongo._mongo_client = None
+        monkeypatch.setattr(settings, "REQUIRE_PERSISTENT_DB", True)
+        monkeypatch.setattr(settings, "USE_MOCK_MONGO", True)
+        with pytest.raises(RuntimeError, match="CRITICAL CONFIGURATION CONFLICT"):
+            mongo.get_client()
+
+        # Test 2: If REQUIRE_PERSISTENT_DB=True and live MongoDB URI fails -> must raise RuntimeError
+        mongo._mongo_client = None
+        monkeypatch.setattr(settings, "USE_MOCK_MONGO", False)
+        monkeypatch.setattr(settings, "MONGODB_TIMEOUT_MS", 200)
+        monkeypatch.setattr(settings, "MONGODB_URI", "mongodb://127.0.0.1:59999/")
+        with pytest.raises(RuntimeError, match="Persistent database connection failure"):
+            mongo.get_client()
+    finally:
+        mongo._mongo_client = orig_client
+        mongo._is_mock = orig_mock
+
+
+def test_readiness_probe_distinguishes_mock_in_production(client: TestClient, monkeypatch):
+    """Validates /ready endpoint returns HTTP 503 if running on mock when persistent DB is required."""
+    monkeypatch.setattr(settings, "REQUIRE_PERSISTENT_DB", True)
+    resp = client.get("/api/v1/ready")
+    assert resp.status_code == 503
+    data = resp.json()
+    assert data["status"] == "not_ready"
+    assert data["is_mock"] is True
+    assert "unsupported: in-memory mock" in data["database"]
+
+
+def test_health_probe_reports_is_mock_field(client: TestClient):
+    """Validates that /health returns boolean is_mock field distinguishing persistent vs in-memory."""
+    resp = client.get("/api/v1/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "is_mock" in data
+    assert isinstance(data["is_mock"], bool)
+
+
+def test_demo_seeding_blocked_in_production(monkeypatch):
+    """Validates that automated demo seeding is strictly aborted in production/staging environments."""
+    from app.db.seed import seed_database
+    db = get_db()
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+
+    count_before = db.companies.count_documents({})
+    seed_database(db, force=False)
+    count_after = db.companies.count_documents({})
+    assert count_after == count_before
+
+
+def test_insecure_example_secret_key_rejected_in_production():
+    """Validates that validate_runtime_security rejects example secret keys in production."""
+    from app.core.config import Settings
+    with pytest.raises(ValueError, match="CRITICAL SECURITY FAILURE"):
+        bad_settings = Settings(
+            ENVIRONMENT="production",
+            SECRET_KEY="sims-super-secret-development-key-change-in-production-1234567890",
+            USE_MOCK_MONGO=False
+        )
+        bad_settings.validate_runtime_security()
+

@@ -1,0 +1,9 @@
+Order ID,Order Date,Customer ID,Customer Name,Segment,Product ID,Product Name,Category,Sub-Category,Sales,Quantity,Discount,Profit
+SO-2026-1001,2026-10-15,CUST-101,Acme Corporation,Corporate,SUP-TEC-001,Canon ImageCLASS Advanced Copier,Technology,Copiers,1299.99,1,0.00,449.99
+SO-2026-1002,2026-10-16,CUST-102,Apex Design Labs,Corporate,SUP-TEC-002,Logitech Wireless Ergonomic Keyboard,Technology,Accessories,179.98,2,0.00,89.98
+SO-2026-1003,2026-10-17,CUST-103,Beacon Financial,Corporate,SUP-FUR-001,Executive High-Back Mesh Chair,Furniture,Chairs,578.00,2,0.00,258.00
+SO-2026-1004,2026-10-18,CUST-104,Clara Henderson,Consumer,SUP-FUR-002,Adjustable Standing Desk 60x30,Furniture,Tables,499.50,1,0.00,209.50
+SO-2026-1005,2026-10-19,CUST-105,David Miller,Consumer,SUP-OFF-001,Heavy Duty Steel Filing Cabinet,Office Supplies,Storage,298.00,2,0.00,138.00
+SO-2026-1006,2026-10-20,CUST-106,Elena Rostova,Consumer,SUP-OFF-002,Premium Multi-Purpose Paper (10 Reams),Office Supplies,Paper,89.98,2,0.00,39.98
+SO-2026-1007,2026-10-21,CUST-107,Horizon Media Group,Corporate,SUP-TEC-002,Logitech Wireless Ergonomic Keyboard,Technology,Accessories,89.99,1,0.00,44.99
+SO-2026-1008,2026-10-22,CUST-108,Global Logistics Inc,Corporate,SUP-FUR-001,Executive High-Back Mesh Chair,Furniture,Chairs,289.00,1,0.00,129.00

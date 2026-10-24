@@ -14,7 +14,7 @@ export const ImportPage: React.FC = () => {
   // File states
   const [file, setFile] = useState<File | null>(null);
   const [previewData, setPreviewData] = useState<CsvPreview | null>(null);
-  const [targetEntity, setTargetEntity] = useState<string>('ORDERS');
+  const [targetEntity, setTargetEntity] = useState<string>('orders');
   const [columnMappings, setColumnMappings] = useState<Record<string, string>>({});
 
   // Loading & feedback
@@ -235,10 +235,10 @@ export const ImportPage: React.FC = () => {
                     value={targetEntity}
                     onChange={(e) => setTargetEntity(e.target.value)}
                   >
-                    <option value="ORDERS">Orders & Sales Line Items</option>
-                    <option value="PRODUCTS">Product Catalog</option>
-                    <option value="INVENTORY">Inventory Levels</option>
-                    <option value="CUSTOMERS">Customer Directory</option>
+                    <option value="orders">Orders & Sales Line Items</option>
+                    <option value="products">Product Catalog</option>
+                    <option value="inventory">Inventory Levels</option>
+                    <option value="customers">Customer Directory</option>
                   </select>
                 </div>
 

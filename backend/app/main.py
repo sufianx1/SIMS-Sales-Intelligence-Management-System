@@ -19,14 +19,27 @@ from app.db.seed import seed_database
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initializes MongoDB indexes and seeds demo data on application startup."""
+    must_persist = settings.REQUIRE_PERSISTENT_DB or settings.ENVIRONMENT.lower() in ("production", "staging")
     try:
         db = get_db()
         ensure_indexes(db)
-        if db.companies.count_documents({}) < 3:
-            logger.info("Initializing demo seed data...")
+
+        # Restrict demo seeding strictly to development/demo environments when explicitly enabled
+        is_dev_env = settings.ENVIRONMENT.lower() in ("development", "dev", "demo", "testing")
+        should_seed = (
+            settings.AUTO_SEED_DEMO_DATA
+            and is_dev_env
+            and settings.ENVIRONMENT.lower() not in ("production", "staging")
+        )
+        if should_seed and db.companies.count_documents({}) < 3:
+            logger.info("Initializing demo seed data in development environment...")
             seed_database(db)
+
         logger.info(f"{settings.APP_NAME} initialized successfully.")
     except Exception as e:
+        if must_persist:
+            logger.critical(f"FATAL: Application startup aborted due to database initialization failure: {e}")
+            raise
         logger.warning(f"Startup database initialization notice: {e}")
     yield
 
